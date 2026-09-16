@@ -1,53 +1,105 @@
 import sys
 from PySide6.QtCore import QDateTime, QTimer, Qt
+from PySide6.QtGui import QColor, QResizeEvent
 from PySide6.QtWidgets import (
     QApplication,
+    QFrame,
+    QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QPushButton,
     QVBoxLayout,
     QWidget,
 )
 
 
 class MainWindow(QMainWindow):
+
     def __init__(self):
         super().__init__()
 
         self.setWindowTitle("Operator Panel")
-        self.showFullScreen()  # Set the window to fullscreen
-        self.setStyleSheet("background-color: white;")
 
-        # 1. Create central container and layouts
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
+        # 1. Main Central Widget
+        self.central_widget = QWidget()
+        self.setCentralWidget(self.central_widget)
 
-        main_vbox = QVBoxLayout(central_widget)
-        top_hbox = QHBoxLayout()
+        # Background Content Area
+        self.background_layout = QHBoxLayout(self.central_widget)
+        self.background_layout.setContentsMargins(0, 0, 0, 0)
 
-        # 2. Create the label for time and date
-        self.clock_label = QLabel()
-        self.clock_label.setStyleSheet(
-            "font-size: 14px; font-weight: bold; color: #000000;"
+        bg_content = QLabel("Main Content / Dashboard View")
+        bg_content.setAlignment(Qt.AlignCenter)
+        bg_content.setStyleSheet("font-size: 24px; background-color: #ffffff;")
+        self.background_layout.addWidget(bg_content)
+
+        # 2. Sidebar Frame (Floating Overlay)
+        self.sidebar_frame = QFrame(self.central_widget)
+        self.sidebar_frame.setObjectName("SidebarFrame")
+        self.sidebar_frame.setFixedWidth(220)
+        self.sidebar_frame.setStyleSheet(
+            """
+            QFrame#SidebarFrame {
+                background-color: #f8f9fa;
+                border: none;
+            }
+        """
         )
 
-        # 3. Position label in top-right using spacers and layout alignment
-        top_hbox.addStretch()  # Pushes the label to the far right
-        top_hbox.addWidget(self.clock_label)
-        main_vbox.addLayout(top_hbox)
-        main_vbox.addStretch()  # Pushes top layout to the top of the window
+        # Shadow effect
+        shadow = QGraphicsDropShadowEffect(self.sidebar_frame)
+        shadow.setBlurRadius(20)
+        shadow.setXOffset(5)
+        shadow.setYOffset(0)
+        shadow.setColor(QColor(0, 0, 0, 80))
+        self.sidebar_frame.setGraphicsEffect(shadow)
 
-        # 4. Set up QTimer to update time every second
+        # Sidebar Layout
+        sidebar_layout = QVBoxLayout(self.sidebar_frame)
+        sidebar_layout.setContentsMargins(15, 15, 15, 15)
+
+        sidebar_layout.addStretch()
+
+        btn_home = QPushButton("Tests")
+        btn_settings = QPushButton("Settings")
+        btn_history = QPushButton("History")
+        sidebar_layout.addWidget(btn_home)
+        sidebar_layout.addWidget(btn_history)
+        sidebar_layout.addWidget(btn_settings)
+
+        sidebar_layout.addStretch()
+
+        # Clock Label
+        self.clock_label = QLabel()
+        self.clock_label.setAlignment(Qt.AlignCenter)
+        self.clock_label.setStyleSheet(
+            "font-size: 14px; font-weight: bold; color: #000000; background: transparent;"
+        )
+        sidebar_layout.addWidget(self.clock_label)
+
+        # Timer setup
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_time)
-        self.timer.start(1000)  # 1000 milliseconds = 1 second
-
-        # Initial display setup
+        self.timer.start(1000)
         self.update_time()
 
+        # Call showFullScreen after layout setup is finished
+        self.showFullScreen()
+        self.sidebar_frame.raise_()
+
+    def resizeEvent(self, event: QResizeEvent):
+        super().resizeEvent(event)
+        if hasattr(self, "sidebar_frame"):
+            # Measure full window height directly
+            self.sidebar_frame.setGeometry(
+                0, 0, self.sidebar_frame.width(), self.height()
+            )
+
     def update_time(self):
-        # Format current date and time
-        current_time = QDateTime.currentDateTime().toString("yyyy-MM-dd  hh:mm:ss AP")
+        current_time = QDateTime.currentDateTime().toString(
+            "hh:mm:ss AP\nyyyy-MM-dd"
+        )
         self.clock_label.setText(current_time)
 
 
