@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QStackedWidget,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -24,17 +25,32 @@ class TestsWindow(QMainWindow):
         self.setWindowTitle("Tests")
         self.resize(500, 700)
 
-        # 1. Create a main horizontal layout for central_widget
+
+        #Creates button elements for the Various tests
+        Wear_btn = QPushButton("Friction Test")
+        Torque_btn = QPushButton("Torque Test")
+        leak_btn = QPushButton("Leak Rate Test")
+
+
+
+        #Creates a main horizontal layout for central_widget
         main_layout = QHBoxLayout(self.central_widget)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # 2. Create the sidebar frame
+        #Creates the sidebar frame
         self.sidebar_frame = QFrame()  # No need to manually pass parent when adding to layout
         self.sidebar_frame.setObjectName("SidebarFrame")
 
+        # Creates Buttons on Sidebar
+        sidebar_layout = QVBoxLayout(self.sidebar_frame)
+        sidebar_layout.setContentsMargins(15, 15, 15, 15)
+        sidebar_layout.addWidget(Wear_btn, alignment=Qt.AlignCenter)
+        sidebar_layout.addWidget(Torque_btn, alignment=Qt.AlignCenter)
+        sidebar_layout.addWidget(leak_btn, alignment=Qt.AlignCenter)
+        sidebar_layout.addStretch()
         # Note: Increase width or decrease button min-width to prevent overflow
-        self.sidebar_frame.setFixedWidth(150)
+        self.sidebar_frame.setFixedWidth(200)
 
         self.sidebar_frame.setStyleSheet(
             """
@@ -61,8 +77,29 @@ class TestsWindow(QMainWindow):
         sidebar_layout.setContentsMargins(15, 15, 15, 15)
         sidebar_layout.addStretch()
 
-        # 3. Add sidebar frame and a stretch area for main content to main_layout
+        #Page Creation for Tests window
+        self.stacked_widget = QStackedWidget()
+        #Wear Page
+        self.page_wear = QWidget()
+        wear_layout = QVBoxLayout(self.page_wear)
+        wear_layout.addWidget(QLabel("test Label!", alignment=Qt.AlignmentFlag.AlignCenter))
+        #Torque Page
+        self.page_torque = QWidget()
+        torque_layout = QVBoxLayout(self.page_torque)
+        torque_layout.addWidget(QLabel("test Label for torque page", alignment=Qt.AlignmentFlag.AlignCenter))
+
+        #Add pages to the stack
+        self.stacked_widget.addWidget(self.page_wear) #index 0
+        self.stacked_widget.addWidget(self.page_torque) #index 1
+
+
+        #Button Logic
+        Wear_btn.clicked.connect(lambda: self.stacked_widget.setCurrentIndex(0))
+        Torque_btn.clicked.connect(lambda: self.stacked_widget.setCurrentIndex(1))
+
+        #Makes Layouts Visible
         main_layout.addWidget(self.sidebar_frame)
+        main_layout.addWidget(self.stacked_widget)
         main_layout.addStretch()  # Pushes sidebar to the left and takes remaining space
 
 
