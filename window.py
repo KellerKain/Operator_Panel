@@ -12,29 +12,44 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+import pyqtgraph as pg
 
 
 class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
+        self.setWindowTitle("Operator Panel - Fixed Position Graph")
 
-        self.setWindowTitle("Operator Panel")
+        pg.setConfigOption("background", "w")
+        pg.setConfigOption("foreground", "k")
 
         # 1. Main Central Widget
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
 
-        # Background Content Area
-        self.background_layout = QHBoxLayout(self.central_widget)
-        self.background_layout.setContentsMargins(0, 0, 0, 0)
+        # 2. Add PyQtGraph PlotWidget as direct child (No Layout)
+        self.graph_widget = pg.PlotWidget(self.central_widget)
+        self.graph_widget.setTitle("Live System Telemetry", color="k", size="12pt")
+        self.graph_widget.showGrid(x=True, y=True, alpha=0.3)
 
-        bg_content = QLabel("Main Content / Dashboard View")
-        bg_content.setAlignment(Qt.AlignCenter)
-        bg_content.setStyleSheet("font-size: 24px; background-color: #ffffff;")
-        self.background_layout.addWidget(bg_content)
+        # Configurable plot line
+        pen = pg.mkPen(color=(220, 50, 50), width=2)
+        self.data_line = self.graph_widget.plot([], [], pen=pen)
 
-        # 2. Sidebar Frame (Floating Overlay)
+        #Graph Positioning
+        self.graph_x = 260  # Horizontal offset from left edge
+        self.graph_y = 50  # Vertical offset from top edge
+        self.graph_width = 500  # Graph width in pixels
+        self.graph_height = 350  # Graph height in pixels
+
+        # Apply positioning and sizing coordinates
+        self.graph_widget.setGeometry(
+            self.graph_x, self.graph_y, self.graph_width, self.graph_height
+        )
+        # =========================================================
+
+        # 3. Sidebar Setup
         self.sidebar_frame = QFrame(self.central_widget)
         self.sidebar_frame.setObjectName("SidebarFrame")
         self.sidebar_frame.setFixedWidth(220)
@@ -44,10 +59,14 @@ class MainWindow(QMainWindow):
                 background-color: #f8f9fa;
                 border: none;
             }
+            QPushButton {
+                min-width: 150px;
+                padding: 10px;
+                font-size: 14px;
+            }
         """
         )
 
-        # Shadow effect
         shadow = QGraphicsDropShadowEffect(self.sidebar_frame)
         shadow.setBlurRadius(20)
         shadow.setXOffset(5)
@@ -55,52 +74,43 @@ class MainWindow(QMainWindow):
         shadow.setColor(QColor(0, 0, 0, 80))
         self.sidebar_frame.setGraphicsEffect(shadow)
 
-        # Sidebar Layout
         sidebar_layout = QVBoxLayout(self.sidebar_frame)
         sidebar_layout.setContentsMargins(15, 15, 15, 15)
-
+        sidebar_layout.addStretch()
+        sidebar_layout.addWidget(QPushButton("Home"), alignment=Qt.AlignCenter)
+        sidebar_layout.addWidget(QPushButton("Tests"), alignment=Qt.AlignCenter)
+        sidebar_layout.addWidget(
+            QPushButton("Settings"), alignment=Qt.AlignCenter
+        )
         sidebar_layout.addStretch()
 
-        btn_home = QPushButton("Tests")
-        btn_settings = QPushButton("Settings")
-        btn_history = QPushButton("History")
-        sidebar_layout.addWidget(btn_home)
-        sidebar_layout.addWidget(btn_history)
-        sidebar_layout.addWidget(btn_settings)
-
-        sidebar_layout.addStretch()
-
-        # Clock Label
         self.clock_label = QLabel()
         self.clock_label.setAlignment(Qt.AlignCenter)
         self.clock_label.setStyleSheet(
-            "font-size: 14px; font-weight: bold; color: #000000; background: transparent;"
+            "font-size: 14px; font-weight: bold; color: #000000;"
         )
-        sidebar_layout.addWidget(self.clock_label)
+        sidebar_layout.addWidget(self.clock_label, alignment=Qt.AlignCenter)
+        sidebar_layout.addStretch()
 
-        # Timer setup
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.update_time)
-        self.timer.start(1000)
-        self.update_time()
-
-        # Call showFullScreen after layout setup is finished
         self.showFullScreen()
+
+        # Keep sidebar rendered on top layer
         self.sidebar_frame.raise_()
+
+    def set_graph_geometry(self, x, y, width, height):
+        """Helper function to update graph position and size dynamically via code."""
+        self.graph_x = x
+        self.graph_y = y
+        self.graph_width = width
+        self.graph_height = height
+        self.graph_widget.setGeometry(x, y, width, height)
 
     def resizeEvent(self, event: QResizeEvent):
         super().resizeEvent(event)
         if hasattr(self, "sidebar_frame"):
-            # Measure full window height directly
             self.sidebar_frame.setGeometry(
                 0, 0, self.sidebar_frame.width(), self.height()
             )
-
-    def update_time(self):
-        current_time = QDateTime.currentDateTime().toString(
-            "hh:mm:ss AP\nyyyy-MM-dd"
-        )
-        self.clock_label.setText(current_time)
 
 
 if __name__ == "__main__":
