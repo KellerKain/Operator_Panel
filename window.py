@@ -14,11 +14,64 @@ from PySide6.QtWidgets import (
 )
 import pyqtgraph as pg
 
+#Logic for the tests window button
+class TestsWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+
+        self.central_widget = QWidget()
+        self.setCentralWidget(self.central_widget)
+        self.setWindowTitle("Tests")
+        self.resize(500, 700)
+
+        # 1. Create a main horizontal layout for central_widget
+        main_layout = QHBoxLayout(self.central_widget)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+
+        # 2. Create the sidebar frame
+        self.sidebar_frame = QFrame()  # No need to manually pass parent when adding to layout
+        self.sidebar_frame.setObjectName("SidebarFrame")
+
+        # Note: Increase width or decrease button min-width to prevent overflow
+        self.sidebar_frame.setFixedWidth(150)
+
+        self.sidebar_frame.setStyleSheet(
+            """
+            QFrame#SidebarFrame {
+                background-color: #f8f9fa;
+                border: none;
+            }
+            QPushButton {
+                min-width: 150px;
+                padding: 10px;
+                font-size: 14px;
+            }
+        """
+        )
+
+        shadow = QGraphicsDropShadowEffect(self.sidebar_frame)
+        shadow.setBlurRadius(20)
+        shadow.setXOffset(5)
+        shadow.setYOffset(0)
+        shadow.setColor(QColor(0, 0, 0, 80))
+        self.sidebar_frame.setGraphicsEffect(shadow)
+
+        sidebar_layout = QVBoxLayout(self.sidebar_frame)
+        sidebar_layout.setContentsMargins(15, 15, 15, 15)
+        sidebar_layout.addStretch()
+
+        # 3. Add sidebar frame and a stretch area for main content to main_layout
+        main_layout.addWidget(self.sidebar_frame)
+        main_layout.addStretch()  # Pushes sidebar to the left and takes remaining space
+
 
 class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
+        #Different the Tests_Window
+        self.tests_window = None
         self.setWindowTitle("Operator Panel - Fixed Position Graph")
 
         pg.setConfigOption("background", "w")
@@ -74,11 +127,20 @@ class MainWindow(QMainWindow):
         shadow.setColor(QColor(0, 0, 0, 80))
         self.sidebar_frame.setGraphicsEffect(shadow)
 
+        #Button Setup
+        Home_btn = QPushButton("Home")
+        Tests_btn = QPushButton("Tests")
+
+
+        #Button Functionality
+        Tests_btn.clicked.connect(self.open_tests_window)
+
+        #Sidebar and button placement
         sidebar_layout = QVBoxLayout(self.sidebar_frame)
         sidebar_layout.setContentsMargins(15, 15, 15, 15)
         sidebar_layout.addStretch()
-        sidebar_layout.addWidget(QPushButton("Home"), alignment=Qt.AlignCenter)
-        sidebar_layout.addWidget(QPushButton("Tests"), alignment=Qt.AlignCenter)
+        sidebar_layout.addWidget(Home_btn, alignment=Qt.AlignCenter)
+        sidebar_layout.addWidget(Tests_btn, alignment=Qt.AlignCenter)
         sidebar_layout.addWidget(
             QPushButton("Settings"), alignment=Qt.AlignCenter
         )
@@ -112,6 +174,12 @@ class MainWindow(QMainWindow):
                 0, 0, self.sidebar_frame.width(), self.height()
             )
 
+    def open_tests_window(self):
+        if self.tests_window is None:
+            self.tests_window = TestsWindow()
+
+        self.tests_window.show()
+        self.tests_window.activateWindow()  # Bring window to front if already openHome_btn
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
