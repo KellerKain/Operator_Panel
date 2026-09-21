@@ -275,7 +275,6 @@ class CurrentTestInfo(QFrame):
                 border-radius: 6px;
             }
         """)
-
 if __name__ == "__main__":
   app = QApplication(sys.argv)
   window = MainWindow()
