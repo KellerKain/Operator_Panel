@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 import pyqtgraph as pg
-
+import zmq
 
 # Logic for the tests window button
 class TestsWindow(QMainWindow):
@@ -24,26 +24,36 @@ class TestsWindow(QMainWindow):
   def __init__(self):
     super().__init__()
 
+    # 1. Initialize ZeroMQ Client Socket (REQ/REP pattern)
+    self.zmq_context = zmq.Context()
+    self.zmq_socket = self.zmq_context.socket(zmq.REQ)
+    # Set a 1-second timeout so the UI doesn't freeze if the backend is down
+    self.zmq_socket.setsockopt(zmq.RCVTIMEO, 1000)
+    self.zmq_socket.setsockopt(zmq.LINGER, 0)
+    try:
+      self.zmq_socket.connect("tcp://127.0.0.1:5555")
+    except Exception as e:
+      print(f"[ZMQ Error] Failed to connect: {e}")
+
     self.central_widget = QWidget()
     self.setCentralWidget(self.central_widget)
     self.setWindowTitle("Tests")
     self.resize(500, 700)
 
-    # Creates button elements for the Various tests
+    # Sidebar Navigation Buttons
     Wear_btn = QPushButton("Wear Test")
     Torque_btn = QPushButton("Torque Test")
     leak_btn = QPushButton("Leak Rate Test")
 
-    # Creates a main horizontal layout for central_widget
+    # Layout Setup
     main_layout = QHBoxLayout(self.central_widget)
     main_layout.setContentsMargins(0, 0, 0, 0)
     main_layout.setSpacing(0)
 
-    # Creates the sidebar frame
+    # Sidebar Frame
     self.sidebar_frame = QFrame()
     self.sidebar_frame.setObjectName("SidebarFrame")
 
-    # Creates Buttons on Sidebar
     sidebar_layout = QVBoxLayout(self.sidebar_frame)
     sidebar_layout.setContentsMargins(15, 15, 15, 15)
     sidebar_layout.addWidget(Wear_btn, alignment=Qt.AlignCenter)
@@ -71,35 +81,109 @@ class TestsWindow(QMainWindow):
     shadow.setColor(QColor(0, 0, 0, 80))
     self.sidebar_frame.setGraphicsEffect(shadow)
 
-    # Page Creation for Tests window
+    # Stacked Widget Pages
     self.stacked_widget = QStackedWidget()
-    # Wear Page
+
+    # --- Page 1: Wear Page ---
     self.page_wear = QWidget()
     wear_layout = QVBoxLayout(self.page_wear)
     self.wear_cycles = WearCycles()
     wear_layout.addWidget(self.wear_cycles)
+
+    # Wear Test Start Button
+    start_wear_btn = QPushButton("Start Wear Test")
+    start_wear_btn.setStyleSheet(
+        "background-color: #808080; color: white; font-weight: bold;"
+    )
+    start_wear_btn.clicked.connect(
+        lambda: self.send_zmq_command("start_wear")
+    )
     wear_layout.addStretch()
-    # Torque Page
+
+    wear_layout.addWidget(start_wear_btn)
+
+
+    # --- Page 2: Torque Page ---
     self.page_torque = QWidget()
     torque_layout = QVBoxLayout(self.page_torque)
     torque_layout.addWidget(
         QLabel(
-            "test Label for torque page", alignment=Qt.AlignmentFlag.AlignCenter
+            "Test settings for Torque page",
+            alignment=Qt.AlignmentFlag.AlignCenter,
         )
     )
 
-    # Add pages to the stack
+    # Torque Test Start Button
+    start_torque_btn = QPushButton("Start Torque Test")
+    start_torque_btn.setStyleSheet(
+        "background-color: #808080; color: white; font-weight: bold;"
+    )
+    start_torque_btn.clicked.connect(
+        lambda: self.send_zmq_command("start_torque")
+    )
+    torque_layout.addStretch()
+    torque_layout.addWidget(start_torque_btn)
+
+
+    # --- Page 3: Leak Page ---
+    self.page_leak = QWidget()
+    leak_layout = QVBoxLayout(self.page_leak)
+    leak_layout.addWidget(
+        QLabel(
+            "Test settings for Leak page",
+            alignment=Qt.AlignmentFlag.AlignCenter,
+        )
+    )
+
+    # Leak Test Start Button
+    start_leak_btn = QPushButton("Start Leak Test")
+    start_leak_btn.setStyleSheet(
+        "background-color: #808080; color: white; font-weight: bold;"
+    )
+    start_leak_btn.clicked.connect(
+        lambda: self.send_zmq_command("start_leak")
+    )
+    leak_layout.addStretch()
+    leak_layout.addWidget(start_leak_btn)
+
+
+    # Add pages to the stacked widget
     self.stacked_widget.addWidget(self.page_wear)  # index 0
     self.stacked_widget.addWidget(self.page_torque)  # index 1
+    self.stacked_widget.addWidget(self.page_leak)  # index 2
 
-    # Button Logic
+    # Sidebar Navigation Logic
     Wear_btn.clicked.connect(lambda: self.stacked_widget.setCurrentIndex(0))
     Torque_btn.clicked.connect(lambda: self.stacked_widget.setCurrentIndex(1))
+    leak_btn.clicked.connect(lambda: self.stacked_widget.setCurrentIndex(2))
 
-    # Makes Layouts Visible
+    # Assemble Main Layout
     main_layout.addWidget(self.sidebar_frame)
     main_layout.addWidget(self.stacked_widget)
-    main_layout.addStretch()
+
+  # --- ZeroMQ Helper Method ---
+  def send_zmq_command(self, command: str):
+    """Sends a state transition event string to the backend state machine."""
+    print(f"[Frontend] Sending command to backend: '{command}'")
+    try:
+      self.zmq_socket.send_string(command)
+      reply = self.zmq_socket.recv_string()
+      print(f"[Backend Reply]: {reply}")
+    except zmq.Again:
+      print(
+          "[ZMQ Warning] Backend response timed out. Is the backend running?"
+      )
+    except Exception as e:
+      print(f"[ZMQ Error]: {e}")
+
+    finally:
+      self.close()
+
+  def closeEvent(self, event):
+    """Clean up ZeroMQ socket on window closure."""
+    self.zmq_socket.close()
+    self.zmq_context.term()
+    super().closeEvent(event)
 
 
 class MainWindow(QMainWindow):
@@ -116,10 +200,10 @@ class MainWindow(QMainWindow):
     self.central_widget = QWidget()
     self.setCentralWidget(self.central_widget)
 
-    # --- CHANGED: Instantiation & Positioning of CurrentTestInfo ---
     self.test_info = CurrentTestInfo(
-        100, 10000, parent=self.central_widget, x=260, y=420, width=220, height=120
+        100, 10000, parent=self.central_widget, x=800, y=120, width=220, height=120
     )
+    self.temp_info = TemperatureInfo(parent=self.central_widget,x=800, y=50,width=220, height=60)
 
     # 2. Add PyQtGraph PlotWidget as direct child (No Layout)
     self.graph_widget = pg.PlotWidget(self.central_widget)
@@ -237,7 +321,6 @@ class WearCycles(QWidget):
     self.setLayout(layout)
 
 
-# Change QWidget to QFrame in the class definition
 class CurrentTestInfo(QFrame):
 
   def __init__(
@@ -255,9 +338,7 @@ class CurrentTestInfo(QFrame):
 
     layout = QVBoxLayout()
 
-    self.current_cycle_num = QLabel(
-        f"Current Cycle Number: \n {cycle_number_live}"
-    )
+    self.current_cycle_num = QLabel(f"Current Cycle Number: \n {cycle_number_live}")
     self.total_cycles = QLabel(f"Total Cycle Number: \n {cycle_number_total}")
 
     layout.addWidget(self.current_cycle_num)
@@ -275,6 +356,38 @@ class CurrentTestInfo(QFrame):
                 border-radius: 6px;
             }
         """)
+
+class TemperatureInfo(QFrame):
+  def __init__(self,parent=None, temp= 0,x=200,y=0,width=200,height=100):
+    super().__init__(parent)
+    self.setGeometry(x,y,width,height)
+
+    layout = QVBoxLayout()
+
+    self.temperature_label = QLabel(f"Temperature: {self.find_temp(temp)} C")
+
+
+
+    layout.addWidget(self.temperature_label)
+
+    self.setLayout(layout)
+
+    self.setFrameShape(QFrame.Box)
+    self.setLineWidth(2)
+    self.setStyleSheet("""
+                CurrentTestInfo {
+                    background-color: #000000;
+                    border: 2px solid #333333;
+                    border-radius: 6px;
+                }
+            """)
+
+  def find_temp(self,sensor_input):
+    if sensor_input == 0:
+      return "--"
+    else:
+      return sensor_input
+
 if __name__ == "__main__":
   app = QApplication(sys.argv)
   window = MainWindow()
