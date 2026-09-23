@@ -21,9 +21,9 @@ import zmq
 # Logic for the tests window button
 class TestsWindow(QMainWindow):
 
-  def __init__(self):
+  def __init__(self,on_test_start=None):
     super().__init__()
-
+    self.on_test_start = on_test_start
     # 1. Initialize ZeroMQ Client Socket (REQ/REP pattern)
     self.zmq_context = zmq.Context()
     self.zmq_socket = self.zmq_context.socket(zmq.REQ)
@@ -96,7 +96,7 @@ class TestsWindow(QMainWindow):
         "background-color: #808080; color: white; font-weight: bold;"
     )
     start_wear_btn.clicked.connect(
-        lambda: self.send_zmq_command("start_wear")
+        lambda: self.send_zmq_command("start_wear", "Wear Test")
     )
     wear_layout.addStretch()
 
@@ -119,7 +119,7 @@ class TestsWindow(QMainWindow):
         "background-color: #808080; color: white; font-weight: bold;"
     )
     start_torque_btn.clicked.connect(
-        lambda: self.send_zmq_command("start_torque")
+        lambda: self.send_zmq_command("start_torque", "Torque Test")
     )
     torque_layout.addStretch()
     torque_layout.addWidget(start_torque_btn)
@@ -141,7 +141,7 @@ class TestsWindow(QMainWindow):
         "background-color: #808080; color: white; font-weight: bold;"
     )
     start_leak_btn.clicked.connect(
-        lambda: self.send_zmq_command("start_leak")
+        lambda: self.send_zmq_command("start_leak", "Leak Test")
     )
     leak_layout.addStretch()
     leak_layout.addWidget(start_leak_btn)
@@ -162,13 +162,15 @@ class TestsWindow(QMainWindow):
     main_layout.addWidget(self.stacked_widget)
 
   # --- ZeroMQ Helper Method ---
-  def send_zmq_command(self, command: str):
+  def send_zmq_command(self, command: str,display_name: str):
     """Sends a state transition event string to the backend state machine."""
     print(f"[Frontend] Sending command to backend: '{command}'")
     try:
       self.zmq_socket.send_string(command)
       reply = self.zmq_socket.recv_string()
       print(f"[Backend Reply]: {reply}")
+      if self.on_test_start:
+        self.on_test_start(display_name)
     except zmq.Again:
       print(
           "[ZMQ Warning] Backend response timed out. Is the backend running?"
@@ -201,7 +203,7 @@ class MainWindow(QMainWindow):
     self.setCentralWidget(self.central_widget)
 
     self.test_info = CurrentTestInfo(
-        100, 10000, parent=self.central_widget, x=800, y=120, width=220, height=120
+        "---",100, 10000, parent=self.central_widget, x=800, y=120, width=220, height=120
     )
     self.temp_info = TemperatureInfo(parent=self.central_widget,x=800, y=50,width=220, height=60)
 
@@ -297,10 +299,14 @@ class MainWindow(QMainWindow):
 
   def open_tests_window(self):
     if self.tests_window is None:
-      self.tests_window = TestsWindow()
+      self.tests_window = TestsWindow(on_test_start=self.handle_test_start)
 
     self.tests_window.show()
     self.tests_window.activateWindow()
+
+  def handle_test_start(self, test_name):
+    # Update label on MainWindow UI
+    self.test_info.update_test_info(test_name=test_name)
 
 
 class WearCycles(QWidget):
@@ -321,10 +327,12 @@ class WearCycles(QWidget):
     self.setLayout(layout)
 
 
+
 class CurrentTestInfo(QFrame):
 
   def __init__(
       self,
+      current_test_name,
       cycle_number_live,
       cycle_number_total,
       parent=None,
@@ -338,9 +346,11 @@ class CurrentTestInfo(QFrame):
 
     layout = QVBoxLayout()
 
+    self.current_test = QLabel(f"Current Test: {current_test_name}")
     self.current_cycle_num = QLabel(f"Current Cycle Number: \n {cycle_number_live}")
     self.total_cycles = QLabel(f"Total Cycle Number: \n {cycle_number_total}")
 
+    layout.addWidget(self.current_test)
     layout.addWidget(self.current_cycle_num)
     layout.addWidget(self.total_cycles)
 
@@ -356,6 +366,16 @@ class CurrentTestInfo(QFrame):
                 border-radius: 6px;
             }
         """)
+
+  def update_test_info(
+          self, test_name=None, cycle_live=None, cycle_total=None
+  ):
+    if test_name is not None:
+      self.current_test.setText(f"Current Test: {test_name}")
+    if cycle_live is not None:
+      self.current_cycle_num.setText(f"Current Cycle Number:\n{cycle_live}")
+    if cycle_total is not None:
+      self.total_cycles.setText(f"Total Cycle Number:\n{cycle_total}")
 
 class TemperatureInfo(QFrame):
   def __init__(self,parent=None, temp= 0,x=200,y=0,width=200,height=100):

@@ -41,7 +41,7 @@ def run_backend_zmq_listener(state_machine):
     if hasattr(state_machine, message):
       event_method = getattr(state_machine, message)
       event_method()  # Trigger the transition
-      socket.send_string(f"ACK: Switched to {state_machine.current_state.id}")
+      socket.send_string(f"ACK: Switched to {state_machine.current_state_value}")
     else:
       socket.send_string(f"ERR: Unknown event '{message}'")
 
