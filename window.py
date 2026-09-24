@@ -18,16 +18,53 @@ from PySide6.QtWidgets import (
 import pyqtgraph as pg
 import zmq
 
-# Logic for the tests window button
+
+# --- Circular Red Stop Button Class ---
+class StopButton(QPushButton):
+
+  def __init__(self, parent=None, x=0, y=0, size=60):
+    super().__init__("STOP", parent)
+    self.setGeometry(x, y, size, size)
+    self.setCursor(Qt.PointingHandCursor)
+
+    # Circular red styling using border-radius
+    self.setStyleSheet(f"""
+            QPushButton {{
+                background-color: #dc3545;
+                color: white;
+                font-weight: bold;
+                font-size: 13px;
+                border: 2px solid #a71d2a;
+                border-radius: {size // 2}px;
+            }}
+            QPushButton:hover {{
+                background-color: #bd2130;
+                border-color: #8b101c;
+            }}
+            QPushButton:pressed {{
+                background-color: #7d101a;
+            }}
+        """)
+
+    # Shadow effect
+    shadow = QGraphicsDropShadowEffect(self)
+    shadow.setBlurRadius(15)
+    shadow.setXOffset(0)
+    shadow.setYOffset(4)
+    shadow.setColor(QColor(0, 0, 0, 100))
+    self.setGraphicsEffect(shadow)
+
+
+# --- Tests Window ---
 class TestsWindow(QMainWindow):
 
-  def __init__(self,on_test_start=None):
+  def __init__(self, on_test_start=None):
     super().__init__()
     self.on_test_start = on_test_start
-    # 1. Initialize ZeroMQ Client Socket (REQ/REP pattern)
+
+    # Initialize ZeroMQ Client Socket (REQ/REP pattern)
     self.zmq_context = zmq.Context()
     self.zmq_socket = self.zmq_context.socket(zmq.REQ)
-    # Set a 1-second timeout so the UI doesn't freeze if the backend is down
     self.zmq_socket.setsockopt(zmq.RCVTIMEO, 1000)
     self.zmq_socket.setsockopt(zmq.LINGER, 0)
     try:
@@ -84,7 +121,7 @@ class TestsWindow(QMainWindow):
     # Stacked Widget Pages
     self.stacked_widget = QStackedWidget()
 
-    # --- Page 1: Wear Page ---
+    # Wear page
     self.page_wear = QWidget()
     wear_layout = QVBoxLayout(self.page_wear)
     self.wear_cycles = WearCycles()
@@ -99,11 +136,9 @@ class TestsWindow(QMainWindow):
         lambda: self.send_zmq_command("start_wear", "Wear Test")
     )
     wear_layout.addStretch()
-
     wear_layout.addWidget(start_wear_btn)
 
-
-    # --- Page 2: Torque Page ---
+    # Torque Page
     self.page_torque = QWidget()
     torque_layout = QVBoxLayout(self.page_torque)
     torque_layout.addWidget(
@@ -124,8 +159,7 @@ class TestsWindow(QMainWindow):
     torque_layout.addStretch()
     torque_layout.addWidget(start_torque_btn)
 
-
-    # --- Page 3: Leak Page ---
+    # Leak Page
     self.page_leak = QWidget()
     leak_layout = QVBoxLayout(self.page_leak)
     leak_layout.addWidget(
@@ -146,7 +180,6 @@ class TestsWindow(QMainWindow):
     leak_layout.addStretch()
     leak_layout.addWidget(start_leak_btn)
 
-
     # Add pages to the stacked widget
     self.stacked_widget.addWidget(self.page_wear)  # index 0
     self.stacked_widget.addWidget(self.page_torque)  # index 1
@@ -162,7 +195,7 @@ class TestsWindow(QMainWindow):
     main_layout.addWidget(self.stacked_widget)
 
   # --- ZeroMQ Helper Method ---
-  def send_zmq_command(self, command: str,display_name: str):
+  def send_zmq_command(self, command: str, display_name: str):
     """Sends a state transition event string to the backend state machine."""
     print(f"[Frontend] Sending command to backend: '{command}'")
     try:
@@ -177,7 +210,6 @@ class TestsWindow(QMainWindow):
       )
     except Exception as e:
       print(f"[ZMQ Error]: {e}")
-
     finally:
       self.close()
 
@@ -188,6 +220,7 @@ class TestsWindow(QMainWindow):
     super().closeEvent(event)
 
 
+# --- Full MainWindow Class ---
 class MainWindow(QMainWindow):
 
   def __init__(self):
@@ -195,19 +228,46 @@ class MainWindow(QMainWindow):
     self.tests_window = None
     self.setWindowTitle("Operator Panel - Fixed Position Graph")
 
+    # 1. ZeroMQ Socket Setup for MainWindow (REQ pattern to send STOP command)
+    self.zmq_context = zmq.Context()
+    self.zmq_socket = self.zmq_context.socket(zmq.REQ)
+    self.zmq_socket.setsockopt(zmq.RCVTIMEO, 1000)
+    self.zmq_socket.setsockopt(zmq.LINGER, 0)
+    try:
+      self.zmq_socket.connect("tcp://127.0.0.1:5555")
+    except Exception as e:
+      print(f"[ZMQ Error] MainWindow failed to connect: {e}")
+
     pg.setConfigOption("background", "w")
     pg.setConfigOption("foreground", "k")
 
-    # 1. Main Central Widget
+    # 2. Main Central Widget
     self.central_widget = QWidget()
     self.setCentralWidget(self.central_widget)
 
+    # Info Widgets
     self.test_info = CurrentTestInfo(
-        "---",100, 10000, parent=self.central_widget, x=800, y=120, width=220, height=120
+        "---",
+        100,
+        10000,
+        parent=self.central_widget,
+        x=800,
+        y=120,
+        width=220,
+        height=120,
     )
-    self.temp_info = TemperatureInfo(parent=self.central_widget,x=800, y=50,width=220, height=60)
+    self.temp_info = TemperatureInfo(
+        parent=self.central_widget, x=800, y=50, width=220, height=60
+    )
 
-    # 2. Add PyQtGraph PlotWidget as direct child (No Layout)
+    # 3. Add Circular Red Stop Button
+    # Positioned at x=880, y=260 (centered horizontally below CurrentTestInfo)
+    self.stop_btn = StopButton(
+        parent=self.central_widget, x=880, y=260, size=60
+    )
+    self.stop_btn.clicked.connect(self.stop_current_test)
+
+    # 4. Add PyQtGraph PlotWidget as direct child (No Layout)
     self.graph_widget = pg.PlotWidget(self.central_widget)
     self.graph_widget.setTitle(
         "Live System Telemetry", color="k", size="12pt"
@@ -228,7 +288,7 @@ class MainWindow(QMainWindow):
         self.graph_x, self.graph_y, self.graph_width, self.graph_height
     )
 
-    # 3. Sidebar Setup
+    # 5. Sidebar Setup
     self.sidebar_frame = QFrame(self.central_widget)
     self.sidebar_frame.setObjectName("SidebarFrame")
     self.sidebar_frame.setFixedWidth(220)
@@ -282,6 +342,24 @@ class MainWindow(QMainWindow):
     # Keep sidebar rendered on top layer
     self.sidebar_frame.raise_()
 
+  def stop_current_test(self):
+    """Sends the 'stop' command to the backend ZMQ state machine and updates the UI info label."""
+    print("[Frontend] Emergency Stop Pressed! Sending 'stop' to backend...")
+    try:
+      self.zmq_socket.send_string("stop")
+      reply = self.zmq_socket.recv_string()
+      print(f"[Backend Reply]: {reply}")
+
+      # Update UI to reflect that test is idle / stopped
+      self.test_info.update_test_info(test_name="Stopped")
+
+    except zmq.Again:
+      print(
+          "[ZMQ Warning] Stop command timed out. Is backend running?"
+      )
+    except Exception as e:
+      print(f"[ZMQ Error]: {e}")
+
   def set_graph_geometry(self, x, y, width, height):
     """Helper function to update graph position and size dynamically via code."""
     self.graph_x = x
@@ -308,7 +386,14 @@ class MainWindow(QMainWindow):
     # Update label on MainWindow UI
     self.test_info.update_test_info(test_name=test_name)
 
+  def closeEvent(self, event):
+    """Clean up ZMQ connection on app exit."""
+    self.zmq_socket.close()
+    self.zmq_context.term()
+    super().closeEvent(event)
 
+
+# --- Helper Component Classes ---
 class WearCycles(QWidget):
 
   def __init__(self):
@@ -325,7 +410,6 @@ class WearCycles(QWidget):
     layout.addWidget(self.label)
     layout.addWidget(self.cycle_number)
     self.setLayout(layout)
-
 
 
 class CurrentTestInfo(QFrame):
@@ -347,7 +431,9 @@ class CurrentTestInfo(QFrame):
     layout = QVBoxLayout()
 
     self.current_test = QLabel(f"Current Test: {current_test_name}")
-    self.current_cycle_num = QLabel(f"Current Cycle Number: \n {cycle_number_live}")
+    self.current_cycle_num = QLabel(
+        f"Current Cycle Number: \n {cycle_number_live}"
+    )
     self.total_cycles = QLabel(f"Total Cycle Number: \n {cycle_number_total}")
 
     layout.addWidget(self.current_test)
@@ -356,7 +442,6 @@ class CurrentTestInfo(QFrame):
 
     self.setLayout(layout)
 
-    # Apply frame border style directly using QFrame attributes or CSS
     self.setFrameShape(QFrame.Box)
     self.setLineWidth(2)
     self.setStyleSheet("""
@@ -365,10 +450,13 @@ class CurrentTestInfo(QFrame):
                 border: 2px solid #333333;
                 border-radius: 6px;
             }
+            QLabel {
+                color: #ffffff;
+            }
         """)
 
   def update_test_info(
-          self, test_name=None, cycle_live=None, cycle_total=None
+      self, test_name=None, cycle_live=None, cycle_total=None
   ):
     if test_name is not None:
       self.current_test.setText(f"Current Test: {test_name}")
@@ -377,16 +465,16 @@ class CurrentTestInfo(QFrame):
     if cycle_total is not None:
       self.total_cycles.setText(f"Total Cycle Number:\n{cycle_total}")
 
+
 class TemperatureInfo(QFrame):
-  def __init__(self,parent=None, temp= 0,x=200,y=0,width=200,height=100):
+
+  def __init__(self, parent=None, temp=0, x=200, y=0, width=200, height=100):
     super().__init__(parent)
-    self.setGeometry(x,y,width,height)
+    self.setGeometry(x, y, width, height)
 
     layout = QVBoxLayout()
 
     self.temperature_label = QLabel(f"Temperature: {self.find_temp(temp)} C")
-
-
 
     layout.addWidget(self.temperature_label)
 
@@ -395,18 +483,22 @@ class TemperatureInfo(QFrame):
     self.setFrameShape(QFrame.Box)
     self.setLineWidth(2)
     self.setStyleSheet("""
-                CurrentTestInfo {
-                    background-color: #000000;
-                    border: 2px solid #333333;
-                    border-radius: 6px;
-                }
-            """)
+            TemperatureInfo {
+                background-color: #000000;
+                border: 2px solid #333333;
+                border-radius: 6px;
+            }
+            QLabel {
+                color: #ffffff;
+            }
+        """)
 
-  def find_temp(self,sensor_input):
+  def find_temp(self, sensor_input):
     if sensor_input == 0:
       return "--"
     else:
       return sensor_input
+
 
 if __name__ == "__main__":
   app = QApplication(sys.argv)
