@@ -19,7 +19,7 @@ import pyqtgraph as pg
 import zmq
 
 
-# --- Circular Red Stop Button Class ---
+#Circular Red Stop Button Class
 class StopButton(QPushButton):
 
   def __init__(self, parent=None, x=0, y=0, size=60):
@@ -55,7 +55,7 @@ class StopButton(QPushButton):
     self.setGraphicsEffect(shadow)
 
 
-# --- Tests Window ---
+#Tests Window
 class TestsWindow(QMainWindow):
 
   def __init__(self, on_test_start=None):
@@ -220,7 +220,7 @@ class TestsWindow(QMainWindow):
     super().closeEvent(event)
 
 
-# --- Full MainWindow Class ---
+#Full MainWindow Class
 class MainWindow(QMainWindow):
 
   def __init__(self):
@@ -228,7 +228,7 @@ class MainWindow(QMainWindow):
     self.tests_window = None
     self.setWindowTitle("Operator Panel - Fixed Position Graph")
 
-    # 1. ZeroMQ Socket Setup for MainWindow (REQ pattern to send STOP command)
+    #ZeroMQ Socket Setup for MainWindow (REQ pattern to send STOP command)
     self.zmq_context = zmq.Context()
     self.zmq_socket = self.zmq_context.socket(zmq.REQ)
     self.zmq_socket.setsockopt(zmq.RCVTIMEO, 1000)
@@ -241,7 +241,7 @@ class MainWindow(QMainWindow):
     pg.setConfigOption("background", "w")
     pg.setConfigOption("foreground", "k")
 
-    # 2. Main Central Widget
+    #Main Central Widget
     self.central_widget = QWidget()
     self.setCentralWidget(self.central_widget)
 
@@ -260,14 +260,14 @@ class MainWindow(QMainWindow):
         parent=self.central_widget, x=800, y=50, width=220, height=60
     )
 
-    # 3. Add Circular Red Stop Button
+    #Add Circular Red Stop Button
     # Positioned at x=880, y=260 (centered horizontally below CurrentTestInfo)
     self.stop_btn = StopButton(
-        parent=self.central_widget, x=880, y=260, size=60
+        parent=self.central_widget, x=840, y=260, size=140
     )
     self.stop_btn.clicked.connect(self.stop_current_test)
 
-    # 4. Add PyQtGraph PlotWidget as direct child (No Layout)
+    #Add PyQtGraph PlotWidget as direct child (No Layout)
     self.graph_widget = pg.PlotWidget(self.central_widget)
     self.graph_widget.setTitle(
         "Live System Telemetry", color="k", size="12pt"
@@ -288,7 +288,7 @@ class MainWindow(QMainWindow):
         self.graph_x, self.graph_y, self.graph_width, self.graph_height
     )
 
-    # 5. Sidebar Setup
+    #Sidebar Setup
     self.sidebar_frame = QFrame(self.central_widget)
     self.sidebar_frame.setObjectName("SidebarFrame")
     self.sidebar_frame.setFixedWidth(220)
@@ -393,7 +393,7 @@ class MainWindow(QMainWindow):
     super().closeEvent(event)
 
 
-# --- Helper Component Classes ---
+#Helper Component Classes
 class WearCycles(QWidget):
 
   def __init__(self):
