@@ -1,4 +1,5 @@
 import sys
+import json
 from PySide6.QtCore import QDateTime, QTimer, Qt
 from PySide6.QtGui import QColor, QResizeEvent
 from PySide6.QtWidgets import (
@@ -62,32 +63,23 @@ class TestsWindow(QMainWindow):
     super().__init__()
     self.on_test_start = on_test_start
 
-    # Initialize ZeroMQ Client Socket (REQ/REP pattern)
     self.zmq_context = zmq.Context()
-    self.zmq_socket = self.zmq_context.socket(zmq.REQ)
-    self.zmq_socket.setsockopt(zmq.RCVTIMEO, 1000)
-    self.zmq_socket.setsockopt(zmq.LINGER, 0)
-    try:
-      self.zmq_socket.connect("tcp://127.0.0.1:5555")
-    except Exception as e:
-      print(f"[ZMQ Error] Failed to connect: {e}")
+    self.zmq_socket = None
+    self.init_zmq_socket()
 
     self.central_widget = QWidget()
     self.setCentralWidget(self.central_widget)
     self.setWindowTitle("Tests")
     self.resize(500, 700)
 
-    # Sidebar Navigation Buttons
     Wear_btn = QPushButton("Wear Test")
     Torque_btn = QPushButton("Torque Test")
     leak_btn = QPushButton("Leak Rate Test")
 
-    # Layout Setup
     main_layout = QHBoxLayout(self.central_widget)
     main_layout.setContentsMargins(0, 0, 0, 0)
     main_layout.setSpacing(0)
 
-    # Sidebar Frame
     self.sidebar_frame = QFrame()
     self.sidebar_frame.setObjectName("SidebarFrame")
 
@@ -100,16 +92,16 @@ class TestsWindow(QMainWindow):
     self.sidebar_frame.setFixedWidth(200)
 
     self.sidebar_frame.setStyleSheet("""
-            QFrame#SidebarFrame {
-                background-color: #f8f9fa;
-                border: none;
-            }
-            QPushButton {
-                min-width: 150px;
-                padding: 10px;
-                font-size: 14px;
-            }
-        """)
+          QFrame#SidebarFrame {
+              background-color: #f8f9fa;
+              border: none;
+          }
+          QPushButton {
+              min-width: 150px;
+              padding: 10px;
+              font-size: 14px;
+          }
+      """)
 
     shadow = QGraphicsDropShadowEffect(self.sidebar_frame)
     shadow.setBlurRadius(20)
@@ -118,7 +110,6 @@ class TestsWindow(QMainWindow):
     shadow.setColor(QColor(0, 0, 0, 80))
     self.sidebar_frame.setGraphicsEffect(shadow)
 
-    # Stacked Widget Pages
     self.stacked_widget = QStackedWidget()
 
     # Wear page
@@ -127,13 +118,19 @@ class TestsWindow(QMainWindow):
     self.wear_cycles = WearCycles()
     wear_layout.addWidget(self.wear_cycles)
 
-    # Wear Test Start Button
+    self.cycle_time = CycleTime()
+    wear_layout.addWidget(self.cycle_time)
+
     start_wear_btn = QPushButton("Start Wear Test")
     start_wear_btn.setStyleSheet(
-        "background-color: #808080; color: white; font-weight: bold;"
+      "background-color: #808080; color: white; font-weight: bold;"
     )
     start_wear_btn.clicked.connect(
-        lambda: self.send_zmq_command("start_wear", "Wear Test")
+      lambda: self.send_zmq_command(
+        "start_wear",
+        "Wear Test",
+        {"cycles": self.wear_cycles.cycle_number.value(), "cycle_time":self.cycle_time.cycle_time_val.value()},
+      )
     )
     wear_layout.addStretch()
     wear_layout.addWidget(start_wear_btn)
@@ -142,19 +139,18 @@ class TestsWindow(QMainWindow):
     self.page_torque = QWidget()
     torque_layout = QVBoxLayout(self.page_torque)
     torque_layout.addWidget(
-        QLabel(
-            "Test settings for Torque page",
-            alignment=Qt.AlignmentFlag.AlignCenter,
-        )
+      QLabel(
+        "Test settings for Torque page",
+        alignment=Qt.AlignmentFlag.AlignCenter,
+      )
     )
 
-    # Torque Test Start Button
     start_torque_btn = QPushButton("Start Torque Test")
     start_torque_btn.setStyleSheet(
-        "background-color: #808080; color: white; font-weight: bold;"
+      "background-color: #808080; color: white; font-weight: bold;"
     )
     start_torque_btn.clicked.connect(
-        lambda: self.send_zmq_command("start_torque", "Torque Test")
+      lambda: self.send_zmq_command("start_torque", "Torque Test")
     )
     torque_layout.addStretch()
     torque_layout.addWidget(start_torque_btn)
@@ -163,60 +159,90 @@ class TestsWindow(QMainWindow):
     self.page_leak = QWidget()
     leak_layout = QVBoxLayout(self.page_leak)
     leak_layout.addWidget(
-        QLabel(
-            "Test settings for Leak page",
-            alignment=Qt.AlignmentFlag.AlignCenter,
-        )
+      QLabel(
+        "Test settings for Leak page",
+        alignment=Qt.AlignmentFlag.AlignCenter,
+      )
     )
 
-    # Leak Test Start Button
     start_leak_btn = QPushButton("Start Leak Test")
     start_leak_btn.setStyleSheet(
-        "background-color: #808080; color: white; font-weight: bold;"
+      "background-color: #808080; color: white; font-weight: bold;"
     )
     start_leak_btn.clicked.connect(
-        lambda: self.send_zmq_command("start_leak", "Leak Test")
+      lambda: self.send_zmq_command("start_leak", "Leak Test")
     )
     leak_layout.addStretch()
     leak_layout.addWidget(start_leak_btn)
 
-    # Add pages to the stacked widget
-    self.stacked_widget.addWidget(self.page_wear)  # index 0
-    self.stacked_widget.addWidget(self.page_torque)  # index 1
-    self.stacked_widget.addWidget(self.page_leak)  # index 2
+    self.stacked_widget.addWidget(self.page_wear)
+    self.stacked_widget.addWidget(self.page_torque)
+    self.stacked_widget.addWidget(self.page_leak)
 
-    # Sidebar Navigation Logic
     Wear_btn.clicked.connect(lambda: self.stacked_widget.setCurrentIndex(0))
     Torque_btn.clicked.connect(lambda: self.stacked_widget.setCurrentIndex(1))
     leak_btn.clicked.connect(lambda: self.stacked_widget.setCurrentIndex(2))
 
-    # Assemble Main Layout
     main_layout.addWidget(self.sidebar_frame)
     main_layout.addWidget(self.stacked_widget)
 
-  # --- ZeroMQ Helper Method ---
-  def send_zmq_command(self, command: str, display_name: str):
-    """Sends a state transition event string to the backend state machine."""
-    print(f"[Frontend] Sending command to backend: '{command}'")
+  def init_zmq_socket(self):
+    """Creates or safely recreates the ZMQ REQ socket."""
+    if hasattr(self, "zmq_socket") and self.zmq_socket:
+      try:
+        self.zmq_socket.close()
+      except Exception:
+        pass
+
+    if self.zmq_context.closed:
+      self.zmq_context = zmq.Context()
+
+    self.zmq_socket = self.zmq_context.socket(zmq.REQ)
+    self.zmq_socket.setsockopt(zmq.RCVTIMEO, 1000)
+    self.zmq_socket.setsockopt(zmq.LINGER, 0)
     try:
-      self.zmq_socket.send_string(command)
+      self.zmq_socket.connect("tcp://127.0.0.1:5555")
+    except Exception as e:
+      print(f"[ZMQ Error] TestsWindow failed to connect: {e}")
+
+  def send_zmq_command(
+          self, command: str, display_name: str, payload_data: dict = None
+  ):
+    """Sends command JSON payload to backend state machine."""
+    print(f"[Frontend] Sending command to backend: '{command}'")
+
+    # Ensure socket is valid before sending
+    if self.zmq_socket is None or self.zmq_socket.closed:
+      self.init_zmq_socket()
+
+    msg = {"command": command}
+    if payload_data:
+      msg.update(payload_data)
+
+    try:
+      self.zmq_socket.send_string(json.dumps(msg))
       reply = self.zmq_socket.recv_string()
       print(f"[Backend Reply]: {reply}")
+
       if self.on_test_start:
         self.on_test_start(display_name)
+
+      # Hide window on success instead of destroying socket via self.close()
+      self.hide()
+
     except zmq.Again:
       print(
-          "[ZMQ Warning] Backend response timed out. Is the backend running?"
+        "[ZMQ Warning] Backend response timed out. Resetting socket..."
       )
+      self.init_zmq_socket()
     except Exception as e:
       print(f"[ZMQ Error]: {e}")
-    finally:
-      self.close()
+      self.init_zmq_socket()
 
   def closeEvent(self, event):
-    """Clean up ZeroMQ socket on window closure."""
-    self.zmq_socket.close()
-    self.zmq_context.term()
+    """Safely close socket when user manually closes window."""
+    if hasattr(self, "zmq_socket") and self.zmq_socket:
+      self.zmq_socket.close()
     super().closeEvent(event)
 
 
@@ -411,6 +437,21 @@ class WearCycles(QWidget):
     layout.addWidget(self.cycle_number)
     self.setLayout(layout)
 
+class CycleTime(QWidget):
+  def __init__(self):
+    super().__init__()
+    layout = QVBoxLayout()
+
+    self.cycle_time_val = QSpinBox()
+    self.label = QLabel("Time per Cycle:")
+
+    self.cycle_time_val.setRange(0, 1_000_000)
+    self.cycle_time_val.setValue(10)
+    self.cycle_time_val.setSingleStep(10)
+
+    layout.addWidget(self.label)
+    layout.addWidget(self.cycle_time_val)
+    self.setLayout(layout)
 
 class CurrentTestInfo(QFrame):
 
