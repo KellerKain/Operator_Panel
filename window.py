@@ -1,7 +1,7 @@
-import sys
 import json
+import sys
 from PySide6.QtCore import QDateTime, QTimer, Qt
-from PySide6.QtGui import QColor, QResizeEvent
+from PySide6.QtGui import QColor, QDoubleValidator, QResizeEvent
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QPushButton,
     QSpinBox,
@@ -20,16 +21,15 @@ import pyqtgraph as pg
 import zmq
 
 
-#Circular Red Stop Button Class
+# Circular Red Stop Button Class
 class StopButton(QPushButton):
 
-  def __init__(self, parent=None, x=0, y=0, size=60):
-    super().__init__("STOP", parent)
-    self.setGeometry(x, y, size, size)
-    self.setCursor(Qt.PointingHandCursor)
+    def __init__(self, parent=None, x=0, y=0, size=60):
+        super().__init__("STOP", parent)
+        self.setGeometry(x, y, size, size)
+        self.setCursor(Qt.PointingHandCursor)
 
-    # Circular red styling using border-radius
-    self.setStyleSheet(f"""
+        self.setStyleSheet(f"""
             QPushButton {{
                 background-color: #dc3545;
                 color: white;
@@ -47,278 +47,234 @@ class StopButton(QPushButton):
             }}
         """)
 
-    # Shadow effect
-    shadow = QGraphicsDropShadowEffect(self)
-    shadow.setBlurRadius(15)
-    shadow.setXOffset(0)
-    shadow.setYOffset(4)
-    shadow.setColor(QColor(0, 0, 0, 100))
-    self.setGraphicsEffect(shadow)
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(15)
+        shadow.setXOffset(0)
+        shadow.setYOffset(4)
+        shadow.setColor(QColor(0, 0, 0, 100))
+        self.setGraphicsEffect(shadow)
 
 
-#Tests Window
+# Settings Window Class
+class SettingsWindow(QMainWindow):
+
+    def __init__(self):
+        super().__init__()
+
+        self.zmq_context = zmq.Context()
+        self.zmq_socket = None
+        self.init_zmq_socket()
+
+        self.central_widget = QWidget()
+        self.setCentralWidget(self.central_widget)
+        self.setWindowTitle("Settings")
+        self.resize(550, 450)
+
+        main_layout = QHBoxLayout(self.central_widget)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+
+        # Sidebar navigation
+        self.sidebar_frame = QFrame()
+        self.sidebar_frame.setObjectName("SidebarFrame")
+        self.sidebar_frame.setFixedWidth(180)
+
+        sidebar_layout = QVBoxLayout(self.sidebar_frame)
+        sidebar_layout.setContentsMargins(15, 15, 15, 15)
+
+        lead_screw_nav_btn = QPushButton("LEAD SCREW")
+        sidebar_layout.addWidget(lead_screw_nav_btn, alignment=Qt.AlignCenter)
+        sidebar_layout.addStretch()
+
+        self.sidebar_frame.setStyleSheet("""
+            QFrame#SidebarFrame {
+                background-color: #f8f9fa;
+                border: none;
+            }
+            QPushButton {
+                min-width: 140px;
+                padding: 10px;
+                font-size: 13px;
+                font-weight: bold;
+            }
+        """)
+
+        shadow = QGraphicsDropShadowEffect(self.sidebar_frame)
+        shadow.setBlurRadius(20)
+        shadow.setXOffset(5)
+        shadow.setYOffset(0)
+        shadow.setColor(QColor(0, 0, 0, 80))
+        self.sidebar_frame.setGraphicsEffect(shadow)
+
+        # Stacked widget container
+        self.stacked_widget = QStackedWidget()
+
+        # Lead Screw Page
+        self.page_lead_screw = QWidget()
+        ls_layout = QVBoxLayout(self.page_lead_screw)
+        ls_layout.setContentsMargins(25, 25, 25, 25)
+
+        title_label = QLabel("Lead Screw Settings")
+        title_label.setStyleSheet("font-size: 18px; font-weight: bold;")
+        ls_layout.addWidget(title_label)
+
+        # Target Pressure Input Box
+        pressure_layout = QVBoxLayout()
+        pressure_label = QLabel("Target Pressure (PSI / Bar):")
+        pressure_label.setStyleSheet("font-size: 13px; font-weight: bold;")
+
+        self.pressure_input = QLineEdit()
+        self.pressure_input.setPlaceholderText("Enter target pressure value...")
+        # Enforce numeric/float values only (0.0 to 10000.0 with 2 decimals)
+        self.pressure_input.setValidator(QDoubleValidator(0.0, 10000.0, 2, self))
+        self.pressure_input.setStyleSheet("""
+            QLineEdit {
+                padding: 8px;
+                font-size: 14px;
+                border: 1px solid #cccccc;
+                border-radius: 4px;
+            }
+        """)
+
+        pressure_layout.addWidget(pressure_label)
+        pressure_layout.addWidget(self.pressure_input)
+        ls_layout.addLayout(pressure_layout)
+
+        # Packing Pressure Action Buttons
+        btn_layout = QHBoxLayout()
+
+        set_packing_btn = QPushButton("Set Packing Pressure")
+        set_packing_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #28a745;
+                color: white;
+                font-weight: bold;
+                padding: 10px;
+                border-radius: 4px;
+            }
+            QPushButton:hover { background-color: #218838; }
+        """)
+        set_packing_btn.clicked.connect(self.set_packing_pressure)
+
+        remove_packing_btn = QPushButton("Remove Packing Pressure")
+        remove_packing_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #dc3545;
+                color: white;
+                font-weight: bold;
+                padding: 10px;
+                border-radius: 4px;
+            }
+            QPushButton:hover { background-color: #c82333; }
+        """)
+        remove_packing_btn.clicked.connect(self.remove_packing_pressure)
+
+        btn_layout.addWidget(set_packing_btn)
+        btn_layout.addWidget(remove_packing_btn)
+
+        ls_layout.addLayout(btn_layout)
+        ls_layout.addStretch()
+
+        self.stacked_widget.addWidget(self.page_lead_screw)
+
+        main_layout.addWidget(self.sidebar_frame)
+        main_layout.addWidget(self.stacked_widget)
+
+    def init_zmq_socket(self):
+        """Creates or safely recreates the ZMQ REQ socket."""
+        if hasattr(self, "zmq_socket") and self.zmq_socket:
+            try:
+                self.zmq_socket.close()
+            except Exception:
+                pass
+
+        if self.zmq_context.closed:
+            self.zmq_context = zmq.Context()
+
+        self.zmq_socket = self.zmq_context.socket(zmq.REQ)
+        self.zmq_socket.setsockopt(zmq.RCVTIMEO, 1000)
+        self.zmq_socket.setsockopt(zmq.LINGER, 0)
+        try:
+            self.zmq_socket.connect("tcp://127.0.0.1:5555")
+        except Exception as e:
+            print(f"[ZMQ Error] SettingsWindow failed to connect: {e}")
+
+    def send_zmq_command(self, command: str, payload_data: dict = None):
+        """Sends command JSON payload to backend state machine."""
+        print(f"[Frontend] Settings sending command: '{command}'")
+
+        if self.zmq_socket is None or self.zmq_socket.closed:
+            self.init_zmq_socket()
+
+        msg = {"command": command}
+        if payload_data:
+            msg.update(payload_data)
+
+        try:
+            self.zmq_socket.send_string(json.dumps(msg))
+            reply = self.zmq_socket.recv_string()
+            print(f"[Backend Reply]: {reply}")
+        except zmq.Again:
+            print("[ZMQ Warning] Settings command timed out.")
+            self.init_zmq_socket()
+        except Exception as e:
+            print(f"[ZMQ Error]: {e}")
+            self.init_zmq_socket()
+
+    def set_packing_pressure(self):
+        try:
+            val = float(self.pressure_input.text())
+        except ValueError:
+            val = 0.0
+
+        self.send_zmq_command("set_packing_pressure", {"target_pressure": val})
+
+    def remove_packing_pressure(self):
+        self.send_zmq_command("remove_packing_pressure")
+
+    def closeEvent(self, event):
+        """Safely close socket when user closes window."""
+        if hasattr(self, "zmq_socket") and self.zmq_socket:
+            self.zmq_socket.close()
+        super().closeEvent(event)
+
+
+# Tests Window
 class TestsWindow(QMainWindow):
 
-  def __init__(self, on_test_start=None):
-    super().__init__()
-    self.on_test_start = on_test_start
+    def __init__(self, on_test_start=None):
+        super().__init__()
+        self.on_test_start = on_test_start
 
-    self.zmq_context = zmq.Context()
-    self.zmq_socket = None
-    self.init_zmq_socket()
+        self.zmq_context = zmq.Context()
+        self.zmq_socket = None
+        self.init_zmq_socket()
 
-    self.central_widget = QWidget()
-    self.setCentralWidget(self.central_widget)
-    self.setWindowTitle("Tests")
-    self.resize(500, 700)
+        self.central_widget = QWidget()
+        self.setCentralWidget(self.central_widget)
+        self.setWindowTitle("Tests")
+        self.resize(500, 700)
 
-    Wear_btn = QPushButton("Wear Test")
-    Torque_btn = QPushButton("Torque Test")
-    leak_btn = QPushButton("Leak Rate Test")
+        Wear_btn = QPushButton("Wear Test")
+        Torque_btn = QPushButton("Torque Test")
+        leak_btn = QPushButton("Leak Rate Test")
 
-    main_layout = QHBoxLayout(self.central_widget)
-    main_layout.setContentsMargins(0, 0, 0, 0)
-    main_layout.setSpacing(0)
+        main_layout = QHBoxLayout(self.central_widget)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
 
-    self.sidebar_frame = QFrame()
-    self.sidebar_frame.setObjectName("SidebarFrame")
+        self.sidebar_frame = QFrame()
+        self.sidebar_frame.setObjectName("SidebarFrame")
 
-    sidebar_layout = QVBoxLayout(self.sidebar_frame)
-    sidebar_layout.setContentsMargins(15, 15, 15, 15)
-    sidebar_layout.addWidget(Wear_btn, alignment=Qt.AlignCenter)
-    sidebar_layout.addWidget(Torque_btn, alignment=Qt.AlignCenter)
-    sidebar_layout.addWidget(leak_btn, alignment=Qt.AlignCenter)
-    sidebar_layout.addStretch()
-    self.sidebar_frame.setFixedWidth(200)
+        sidebar_layout = QVBoxLayout(self.sidebar_frame)
+        sidebar_layout.setContentsMargins(15, 15, 15, 15)
+        sidebar_layout.addWidget(Wear_btn, alignment=Qt.AlignCenter)
+        sidebar_layout.addWidget(Torque_btn, alignment=Qt.AlignCenter)
+        sidebar_layout.addWidget(leak_btn, alignment=Qt.AlignCenter)
+        sidebar_layout.addStretch()
+        self.sidebar_frame.setFixedWidth(200)
 
-    self.sidebar_frame.setStyleSheet("""
-          QFrame#SidebarFrame {
-              background-color: #f8f9fa;
-              border: none;
-          }
-          QPushButton {
-              min-width: 150px;
-              padding: 10px;
-              font-size: 14px;
-          }
-      """)
-
-    shadow = QGraphicsDropShadowEffect(self.sidebar_frame)
-    shadow.setBlurRadius(20)
-    shadow.setXOffset(5)
-    shadow.setYOffset(0)
-    shadow.setColor(QColor(0, 0, 0, 80))
-    self.sidebar_frame.setGraphicsEffect(shadow)
-
-    self.stacked_widget = QStackedWidget()
-
-    # Wear page
-    self.page_wear = QWidget()
-    wear_layout = QVBoxLayout(self.page_wear)
-    self.wear_cycles = WearCycles()
-    wear_layout.addWidget(self.wear_cycles)
-
-    self.cycle_time = CycleTime()
-    wear_layout.addWidget(self.cycle_time)
-
-    start_wear_btn = QPushButton("Start Wear Test")
-    start_wear_btn.setStyleSheet(
-      "background-color: #808080; color: white; font-weight: bold;"
-    )
-    start_wear_btn.clicked.connect(
-      lambda: self.send_zmq_command(
-        "start_wear",
-        "Wear Test",
-        {"cycles": self.wear_cycles.cycle_number.value(), "cycle_time":self.cycle_time.cycle_time_val.value()},
-      )
-    )
-    wear_layout.addStretch()
-    wear_layout.addWidget(start_wear_btn)
-
-    # Torque Page
-    self.page_torque = QWidget()
-    torque_layout = QVBoxLayout(self.page_torque)
-    torque_layout.addWidget(
-      QLabel(
-        "Test settings for Torque page",
-        alignment=Qt.AlignmentFlag.AlignCenter,
-      )
-    )
-
-    start_torque_btn = QPushButton("Start Torque Test")
-    start_torque_btn.setStyleSheet(
-      "background-color: #808080; color: white; font-weight: bold;"
-    )
-    start_torque_btn.clicked.connect(
-      lambda: self.send_zmq_command("start_torque", "Torque Test")
-    )
-    torque_layout.addStretch()
-    torque_layout.addWidget(start_torque_btn)
-
-    # Leak Page
-    self.page_leak = QWidget()
-    leak_layout = QVBoxLayout(self.page_leak)
-    leak_layout.addWidget(
-      QLabel(
-        "Test settings for Leak page",
-        alignment=Qt.AlignmentFlag.AlignCenter,
-      )
-    )
-
-    start_leak_btn = QPushButton("Start Leak Test")
-    start_leak_btn.setStyleSheet(
-      "background-color: #808080; color: white; font-weight: bold;"
-    )
-    start_leak_btn.clicked.connect(
-      lambda: self.send_zmq_command("start_leak", "Leak Test")
-    )
-    leak_layout.addStretch()
-    leak_layout.addWidget(start_leak_btn)
-
-    self.stacked_widget.addWidget(self.page_wear)
-    self.stacked_widget.addWidget(self.page_torque)
-    self.stacked_widget.addWidget(self.page_leak)
-
-    Wear_btn.clicked.connect(lambda: self.stacked_widget.setCurrentIndex(0))
-    Torque_btn.clicked.connect(lambda: self.stacked_widget.setCurrentIndex(1))
-    leak_btn.clicked.connect(lambda: self.stacked_widget.setCurrentIndex(2))
-
-    main_layout.addWidget(self.sidebar_frame)
-    main_layout.addWidget(self.stacked_widget)
-
-  def init_zmq_socket(self):
-    """Creates or safely recreates the ZMQ REQ socket."""
-    if hasattr(self, "zmq_socket") and self.zmq_socket:
-      try:
-        self.zmq_socket.close()
-      except Exception:
-        pass
-
-    if self.zmq_context.closed:
-      self.zmq_context = zmq.Context()
-
-    self.zmq_socket = self.zmq_context.socket(zmq.REQ)
-    self.zmq_socket.setsockopt(zmq.RCVTIMEO, 1000)
-    self.zmq_socket.setsockopt(zmq.LINGER, 0)
-    try:
-      self.zmq_socket.connect("tcp://127.0.0.1:5555")
-    except Exception as e:
-      print(f"[ZMQ Error] TestsWindow failed to connect: {e}")
-
-  def send_zmq_command(
-          self, command: str, display_name: str, payload_data: dict = None
-  ):
-    """Sends command JSON payload to backend state machine."""
-    print(f"[Frontend] Sending command to backend: '{command}'")
-
-    # Ensure socket is valid before sending
-    if self.zmq_socket is None or self.zmq_socket.closed:
-      self.init_zmq_socket()
-
-    msg = {"command": command}
-    if payload_data:
-      msg.update(payload_data)
-
-    try:
-      self.zmq_socket.send_string(json.dumps(msg))
-      reply = self.zmq_socket.recv_string()
-      print(f"[Backend Reply]: {reply}")
-
-      if self.on_test_start:
-        self.on_test_start(display_name)
-
-      # Hide window on success instead of destroying socket via self.close()
-      self.hide()
-
-    except zmq.Again:
-      print(
-        "[ZMQ Warning] Backend response timed out. Resetting socket..."
-      )
-      self.init_zmq_socket()
-    except Exception as e:
-      print(f"[ZMQ Error]: {e}")
-      self.init_zmq_socket()
-
-  def closeEvent(self, event):
-    """Safely close socket when user manually closes window."""
-    if hasattr(self, "zmq_socket") and self.zmq_socket:
-      self.zmq_socket.close()
-    super().closeEvent(event)
-
-
-#Full MainWindow Class
-class MainWindow(QMainWindow):
-
-  def __init__(self):
-    super().__init__()
-    self.tests_window = None
-    self.setWindowTitle("Operator Panel - Fixed Position Graph")
-
-    #ZeroMQ Socket Setup for MainWindow (REQ pattern to send STOP command)
-    self.zmq_context = zmq.Context()
-    self.zmq_socket = self.zmq_context.socket(zmq.REQ)
-    self.zmq_socket.setsockopt(zmq.RCVTIMEO, 1000)
-    self.zmq_socket.setsockopt(zmq.LINGER, 0)
-    try:
-      self.zmq_socket.connect("tcp://127.0.0.1:5555")
-    except Exception as e:
-      print(f"[ZMQ Error] MainWindow failed to connect: {e}")
-
-    pg.setConfigOption("background", "w")
-    pg.setConfigOption("foreground", "k")
-
-    #Main Central Widget
-    self.central_widget = QWidget()
-    self.setCentralWidget(self.central_widget)
-
-    # Info Widgets
-    self.test_info = CurrentTestInfo(
-        "---",
-        100,
-        10000,
-        parent=self.central_widget,
-        x=800,
-        y=120,
-        width=220,
-        height=120,
-    )
-    self.temp_info = TemperatureInfo(
-        parent=self.central_widget, x=800, y=50, width=220, height=60
-    )
-
-    #Add Circular Red Stop Button
-    # Positioned at x=880, y=260 (centered horizontally below CurrentTestInfo)
-    self.stop_btn = StopButton(
-        parent=self.central_widget, x=840, y=260, size=140
-    )
-    self.stop_btn.clicked.connect(self.stop_current_test)
-
-    #Add PyQtGraph PlotWidget as direct child (No Layout)
-    self.graph_widget = pg.PlotWidget(self.central_widget)
-    self.graph_widget.setTitle(
-        "Live System Telemetry", color="k", size="12pt"
-    )
-    self.graph_widget.showGrid(x=True, y=True, alpha=0.3)
-
-    # Configurable plot line
-    pen = pg.mkPen(color=(220, 50, 50), width=2)
-    self.data_line = self.graph_widget.plot([], [], pen=pen)
-
-    # Graph Positioning
-    self.graph_x = 260
-    self.graph_y = 50
-    self.graph_width = 500
-    self.graph_height = 350
-
-    self.graph_widget.setGeometry(
-        self.graph_x, self.graph_y, self.graph_width, self.graph_height
-    )
-
-    #Sidebar Setup
-    self.sidebar_frame = QFrame(self.central_widget)
-    self.sidebar_frame.setObjectName("SidebarFrame")
-    self.sidebar_frame.setFixedWidth(220)
-    self.sidebar_frame.setStyleSheet("""
+        self.sidebar_frame.setStyleSheet("""
             QFrame#SidebarFrame {
                 background-color: #f8f9fa;
                 border: none;
@@ -330,162 +286,376 @@ class MainWindow(QMainWindow):
             }
         """)
 
-    shadow = QGraphicsDropShadowEffect(self.sidebar_frame)
-    shadow.setBlurRadius(20)
-    shadow.setXOffset(5)
-    shadow.setYOffset(0)
-    shadow.setColor(QColor(0, 0, 0, 80))
-    self.sidebar_frame.setGraphicsEffect(shadow)
+        shadow = QGraphicsDropShadowEffect(self.sidebar_frame)
+        shadow.setBlurRadius(20)
+        shadow.setXOffset(5)
+        shadow.setYOffset(0)
+        shadow.setColor(QColor(0, 0, 0, 80))
+        self.sidebar_frame.setGraphicsEffect(shadow)
 
-    # Button Setup
-    Home_btn = QPushButton("Home")
-    Tests_btn = QPushButton("Tests")
+        self.stacked_widget = QStackedWidget()
 
-    # Button Functionality
-    Tests_btn.clicked.connect(self.open_tests_window)
+        # Wear page
+        self.page_wear = QWidget()
+        wear_layout = QVBoxLayout(self.page_wear)
+        self.wear_cycles = WearCycles()
+        wear_layout.addWidget(self.wear_cycles)
 
-    # Sidebar and button placement
-    sidebar_layout = QVBoxLayout(self.sidebar_frame)
-    sidebar_layout.setContentsMargins(15, 15, 15, 15)
-    sidebar_layout.addStretch()
-    sidebar_layout.addWidget(Home_btn, alignment=Qt.AlignCenter)
-    sidebar_layout.addWidget(Tests_btn, alignment=Qt.AlignCenter)
-    sidebar_layout.addWidget(
-        QPushButton("Settings"), alignment=Qt.AlignCenter
-    )
-    sidebar_layout.addStretch()
+        self.cycle_time = CycleTime()
+        wear_layout.addWidget(self.cycle_time)
 
-    self.clock_label = QLabel()
-    self.clock_label.setAlignment(Qt.AlignCenter)
-    self.clock_label.setStyleSheet(
-        "font-size: 14px; font-weight: bold; color: #000000;"
-    )
-    sidebar_layout.addWidget(self.clock_label, alignment=Qt.AlignCenter)
-    sidebar_layout.addStretch()
+        start_wear_btn = QPushButton("Start Wear Test")
+        start_wear_btn.setStyleSheet(
+            "background-color: #808080; color: white; font-weight: bold;"
+        )
+        start_wear_btn.clicked.connect(
+            lambda: self.send_zmq_command(
+                "start_wear",
+                "Wear Test",
+                {
+                    "cycles": self.wear_cycles.cycle_number.value(),
+                    "cycle_time": self.cycle_time.cycle_time_val.value(),
+                },
+            )
+        )
+        wear_layout.addStretch()
+        wear_layout.addWidget(start_wear_btn)
 
-    self.showFullScreen()
+        # Torque Page
+        self.page_torque = QWidget()
+        torque_layout = QVBoxLayout(self.page_torque)
+        torque_layout.addWidget(
+            QLabel(
+                "Test settings for Torque page",
+                alignment=Qt.AlignmentFlag.AlignCenter,
+            )
+        )
 
-    # Keep sidebar rendered on top layer
-    self.sidebar_frame.raise_()
+        start_torque_btn = QPushButton("Start Torque Test")
+        start_torque_btn.setStyleSheet(
+            "background-color: #808080; color: white; font-weight: bold;"
+        )
+        start_torque_btn.clicked.connect(
+            lambda: self.send_zmq_command("start_torque", "Torque Test")
+        )
+        torque_layout.addStretch()
+        torque_layout.addWidget(start_torque_btn)
 
-  def stop_current_test(self):
-    """Sends the 'stop' command to the backend ZMQ state machine and updates the UI info label."""
-    print("[Frontend] Emergency Stop Pressed! Sending 'stop' to backend...")
-    try:
-      self.zmq_socket.send_string("stop")
-      reply = self.zmq_socket.recv_string()
-      print(f"[Backend Reply]: {reply}")
+        # Leak Page
+        self.page_leak = QWidget()
+        leak_layout = QVBoxLayout(self.page_leak)
+        leak_layout.addWidget(
+            QLabel(
+                "Test settings for Leak page",
+                alignment=Qt.AlignmentFlag.AlignCenter,
+            )
+        )
 
-      # Update UI to reflect that test is idle / stopped
-      self.test_info.update_test_info(test_name="Stopped")
+        start_leak_btn = QPushButton("Start Leak Test")
+        start_leak_btn.setStyleSheet(
+            "background-color: #808080; color: white; font-weight: bold;"
+        )
+        start_leak_btn.clicked.connect(
+            lambda: self.send_zmq_command("start_leak", "Leak Test")
+        )
+        leak_layout.addStretch()
+        leak_layout.addWidget(start_leak_btn)
 
-    except zmq.Again:
-      print(
-          "[ZMQ Warning] Stop command timed out. Is backend running?"
-      )
-    except Exception as e:
-      print(f"[ZMQ Error]: {e}")
+        self.stacked_widget.addWidget(self.page_wear)
+        self.stacked_widget.addWidget(self.page_torque)
+        self.stacked_widget.addWidget(self.page_leak)
 
-  def set_graph_geometry(self, x, y, width, height):
-    """Helper function to update graph position and size dynamically via code."""
-    self.graph_x = x
-    self.graph_y = y
-    self.graph_width = width
-    self.graph_height = height
-    self.graph_widget.setGeometry(x, y, width, height)
+        Wear_btn.clicked.connect(lambda: self.stacked_widget.setCurrentIndex(0))
+        Torque_btn.clicked.connect(lambda: self.stacked_widget.setCurrentIndex(1))
+        leak_btn.clicked.connect(lambda: self.stacked_widget.setCurrentIndex(2))
 
-  def resizeEvent(self, event: QResizeEvent):
-    super().resizeEvent(event)
-    if hasattr(self, "sidebar_frame"):
-      self.sidebar_frame.setGeometry(
-          0, 0, self.sidebar_frame.width(), self.height()
-      )
+        main_layout.addWidget(self.sidebar_frame)
+        main_layout.addWidget(self.stacked_widget)
 
-  def open_tests_window(self):
-    if self.tests_window is None:
-      self.tests_window = TestsWindow(on_test_start=self.handle_test_start)
+    def init_zmq_socket(self):
+        """Creates or safely recreates the ZMQ REQ socket."""
+        if hasattr(self, "zmq_socket") and self.zmq_socket:
+            try:
+                self.zmq_socket.close()
+            except Exception:
+                pass
 
-    self.tests_window.show()
-    self.tests_window.activateWindow()
+        if self.zmq_context.closed:
+            self.zmq_context = zmq.Context()
 
-  def handle_test_start(self, test_name):
-    # Update label on MainWindow UI
-    self.test_info.update_test_info(test_name=test_name)
+        self.zmq_socket = self.zmq_context.socket(zmq.REQ)
+        self.zmq_socket.setsockopt(zmq.RCVTIMEO, 1000)
+        self.zmq_socket.setsockopt(zmq.LINGER, 0)
+        try:
+            self.zmq_socket.connect("tcp://127.0.0.1:5555")
+        except Exception as e:
+            print(f"[ZMQ Error] TestsWindow failed to connect: {e}")
 
-  def closeEvent(self, event):
-    """Clean up ZMQ connection on app exit."""
-    self.zmq_socket.close()
-    self.zmq_context.term()
-    super().closeEvent(event)
+    def send_zmq_command(
+        self, command: str, display_name: str, payload_data: dict = None
+    ):
+        """Sends command JSON payload to backend state machine."""
+        print(f"[Frontend] Sending command to backend: '{command}'")
+
+        if self.zmq_socket is None or self.zmq_socket.closed:
+            self.init_zmq_socket()
+
+        msg = {"command": command}
+        if payload_data:
+            msg.update(payload_data)
+
+        try:
+            self.zmq_socket.send_string(json.dumps(msg))
+            reply = self.zmq_socket.recv_string()
+            print(f"[Backend Reply]: {reply}")
+
+            if self.on_test_start:
+                self.on_test_start(display_name)
+
+            self.hide()
+
+        except zmq.Again:
+            print(
+                "[ZMQ Warning] Backend response timed out. Resetting socket..."
+            )
+            self.init_zmq_socket()
+        except Exception as e:
+            print(f"[ZMQ Error]: {e}")
+            self.init_zmq_socket()
+
+    def closeEvent(self, event):
+        """Safely close socket when user manually closes window."""
+        if hasattr(self, "zmq_socket") and self.zmq_socket:
+            self.zmq_socket.close()
+        super().closeEvent(event)
 
 
-#Helper Component Classes
+# Full MainWindow Class
+class MainWindow(QMainWindow):
+
+    def __init__(self):
+        super().__init__()
+        self.tests_window = None
+        self.settings_window = None
+        self.setWindowTitle("Operator Panel - Fixed Position Graph")
+
+        self.zmq_context = zmq.Context()
+        self.zmq_socket = self.zmq_context.socket(zmq.REQ)
+        self.zmq_socket.setsockopt(zmq.RCVTIMEO, 1000)
+        self.zmq_socket.setsockopt(zmq.LINGER, 0)
+        try:
+            self.zmq_socket.connect("tcp://127.0.0.1:5555")
+        except Exception as e:
+            print(f"[ZMQ Error] MainWindow failed to connect: {e}")
+
+        pg.setConfigOption("background", "w")
+        pg.setConfigOption("foreground", "k")
+
+        self.central_widget = QWidget()
+        self.setCentralWidget(self.central_widget)
+
+        # Info Widgets
+        self.test_info = CurrentTestInfo(
+            "---",
+            100,
+            10000,
+            parent=self.central_widget,
+            x=800,
+            y=120,
+            width=220,
+            height=120,
+        )
+        self.temp_info = TemperatureInfo(
+            parent=self.central_widget, x=800, y=50, width=220, height=60
+        )
+
+        # Stop Button
+        self.stop_btn = StopButton(
+            parent=self.central_widget, x=840, y=260, size=140
+        )
+        self.stop_btn.clicked.connect(self.stop_current_test)
+
+        # PlotWidget
+        self.graph_widget = pg.PlotWidget(self.central_widget)
+        self.graph_widget.setTitle(
+            "Live System Telemetry", color="k", size="12pt"
+        )
+        self.graph_widget.showGrid(x=True, y=True, alpha=0.3)
+
+        pen = pg.mkPen(color=(220, 50, 50), width=2)
+        self.data_line = self.graph_widget.plot([], [], pen=pen)
+
+        self.graph_x = 260
+        self.graph_y = 50
+        self.graph_width = 500
+        self.graph_height = 350
+
+        self.graph_widget.setGeometry(
+            self.graph_x, self.graph_y, self.graph_width, self.graph_height
+        )
+
+        # Sidebar Setup
+        self.sidebar_frame = QFrame(self.central_widget)
+        self.sidebar_frame.setObjectName("SidebarFrame")
+        self.sidebar_frame.setFixedWidth(220)
+        self.sidebar_frame.setStyleSheet("""
+            QFrame#SidebarFrame {
+                background-color: #f8f9fa;
+                border: none;
+            }
+            QPushButton {
+                min-width: 150px;
+                padding: 10px;
+                font-size: 14px;
+            }
+        """)
+
+        shadow = QGraphicsDropShadowEffect(self.sidebar_frame)
+        shadow.setBlurRadius(20)
+        shadow.setXOffset(5)
+        shadow.setYOffset(0)
+        shadow.setColor(QColor(0, 0, 0, 80))
+        self.sidebar_frame.setGraphicsEffect(shadow)
+
+        # Button Setup
+        Home_btn = QPushButton("Home")
+        Tests_btn = QPushButton("Tests")
+        Settings_btn = QPushButton("Settings")
+
+        Tests_btn.clicked.connect(self.open_tests_window)
+        Settings_btn.clicked.connect(self.open_settings_window)
+
+        sidebar_layout = QVBoxLayout(self.sidebar_frame)
+        sidebar_layout.setContentsMargins(15, 15, 15, 15)
+        sidebar_layout.addStretch()
+        sidebar_layout.addWidget(Home_btn, alignment=Qt.AlignCenter)
+        sidebar_layout.addWidget(Tests_btn, alignment=Qt.AlignCenter)
+        sidebar_layout.addWidget(Settings_btn, alignment=Qt.AlignCenter)
+        sidebar_layout.addStretch()
+
+        self.clock_label = QLabel()
+        self.clock_label.setAlignment(Qt.AlignCenter)
+        self.clock_label.setStyleSheet(
+            "font-size: 14px; font-weight: bold; color: #000000;"
+        )
+        sidebar_layout.addWidget(self.clock_label, alignment=Qt.AlignCenter)
+        sidebar_layout.addStretch()
+
+        self.showFullScreen()
+        self.sidebar_frame.raise_()
+
+    def stop_current_test(self):
+        print("[Frontend] Emergency Stop Pressed! Sending 'stop' to backend...")
+        try:
+            self.zmq_socket.send_string("stop")
+            reply = self.zmq_socket.recv_string()
+            print(f"[Backend Reply]: {reply}")
+            self.test_info.update_test_info(test_name="Stopped")
+        except zmq.Again:
+            print("[ZMQ Warning] Stop command timed out.")
+        except Exception as e:
+            print(f"[ZMQ Error]: {e}")
+
+    def open_tests_window(self):
+        if self.tests_window is None:
+            self.tests_window = TestsWindow(on_test_start=self.handle_test_start)
+
+        self.tests_window.show()
+        self.tests_window.activateWindow()
+
+    def open_settings_window(self):
+        if self.settings_window is None:
+            self.settings_window = SettingsWindow()
+
+        self.settings_window.show()
+        self.settings_window.activateWindow()
+
+    def handle_test_start(self, test_name):
+        self.test_info.update_test_info(test_name=test_name)
+
+    def resizeEvent(self, event: QResizeEvent):
+        super().resizeEvent(event)
+        if hasattr(self, "sidebar_frame"):
+            self.sidebar_frame.setGeometry(
+                0, 0, self.sidebar_frame.width(), self.height()
+            )
+
+    def closeEvent(self, event):
+        self.zmq_socket.close()
+        self.zmq_context.term()
+        super().closeEvent(event)
+
+
+# Helper Component Classes
 class WearCycles(QWidget):
 
-  def __init__(self):
-    super().__init__()
-    layout = QVBoxLayout()
+    def __init__(self):
+        super().__init__()
+        layout = QVBoxLayout()
 
-    self.cycle_number = QSpinBox()
-    self.label = QLabel("Number of Cycles:")
+        self.cycle_number = QSpinBox()
+        self.label = QLabel("Number of Cycles:")
 
-    self.cycle_number.setRange(0, 1_000_000)
-    self.cycle_number.setValue(10_000)
-    self.cycle_number.setSingleStep(500)
+        self.cycle_number.setRange(0, 1_000_000)
+        self.cycle_number.setValue(10_000)
+        self.cycle_number.setSingleStep(500)
 
-    layout.addWidget(self.label)
-    layout.addWidget(self.cycle_number)
-    self.setLayout(layout)
+        layout.addWidget(self.label)
+        layout.addWidget(self.cycle_number)
+        self.setLayout(layout)
+
 
 class CycleTime(QWidget):
-  def __init__(self):
-    super().__init__()
-    layout = QVBoxLayout()
 
-    self.cycle_time_val = QSpinBox()
-    self.label = QLabel("Time per Cycle:")
+    def __init__(self):
+        super().__init__()
+        layout = QVBoxLayout()
 
-    self.cycle_time_val.setRange(0, 1_000_000)
-    self.cycle_time_val.setValue(10)
-    self.cycle_time_val.setSingleStep(10)
+        self.cycle_time_val = QSpinBox()
+        self.label = QLabel("Time per Cycle:")
 
-    layout.addWidget(self.label)
-    layout.addWidget(self.cycle_time_val)
-    self.setLayout(layout)
+        self.cycle_time_val.setRange(0, 1_000_000)
+        self.cycle_time_val.setValue(10)
+        self.cycle_time_val.setSingleStep(10)
+
+        layout.addWidget(self.label)
+        layout.addWidget(self.cycle_time_val)
+        self.setLayout(layout)
+
 
 class CurrentTestInfo(QFrame):
 
-  def __init__(
-      self,
-      current_test_name,
-      cycle_number_live,
-      cycle_number_total,
-      parent=None,
-      x=0,
-      y=0,
-      width=200,
-      height=100,
-  ):
-    super().__init__(parent)
-    self.setGeometry(x, y, width, height)
+    def __init__(
+        self,
+        current_test_name,
+        cycle_number_live,
+        cycle_number_total,
+        parent=None,
+        x=0,
+        y=0,
+        width=200,
+        height=100,
+    ):
+        super().__init__(parent)
+        self.setGeometry(x, y, width, height)
 
-    layout = QVBoxLayout()
+        layout = QVBoxLayout()
 
-    self.current_test = QLabel(f"Current Test: {current_test_name}")
-    self.current_cycle_num = QLabel(
-        f"Current Cycle Number: \n {cycle_number_live}"
-    )
-    self.total_cycles = QLabel(f"Total Cycle Number: \n {cycle_number_total}")
+        self.current_test = QLabel(f"Current Test: {current_test_name}")
+        self.current_cycle_num = QLabel(
+            f"Current Cycle Number: \n {cycle_number_live}"
+        )
+        self.total_cycles = QLabel(f"Total Cycle Number: \n {cycle_number_total}")
 
-    layout.addWidget(self.current_test)
-    layout.addWidget(self.current_cycle_num)
-    layout.addWidget(self.total_cycles)
+        layout.addWidget(self.current_test)
+        layout.addWidget(self.current_cycle_num)
+        layout.addWidget(self.total_cycles)
 
-    self.setLayout(layout)
+        self.setLayout(layout)
 
-    self.setFrameShape(QFrame.Box)
-    self.setLineWidth(2)
-    self.setStyleSheet("""
+        self.setFrameShape(QFrame.Box)
+        self.setLineWidth(2)
+        self.setStyleSheet("""
             CurrentTestInfo {
                 background-color: #000000;
                 border: 2px solid #333333;
@@ -496,34 +666,34 @@ class CurrentTestInfo(QFrame):
             }
         """)
 
-  def update_test_info(
-      self, test_name=None, cycle_live=None, cycle_total=None
-  ):
-    if test_name is not None:
-      self.current_test.setText(f"Current Test: {test_name}")
-    if cycle_live is not None:
-      self.current_cycle_num.setText(f"Current Cycle Number:\n{cycle_live}")
-    if cycle_total is not None:
-      self.total_cycles.setText(f"Total Cycle Number:\n{cycle_total}")
+    def update_test_info(
+        self, test_name=None, cycle_live=None, cycle_total=None
+    ):
+        if test_name is not None:
+            self.current_test.setText(f"Current Test: {test_name}")
+        if cycle_live is not None:
+            self.current_cycle_num.setText(f"Current Cycle Number:\n{cycle_live}")
+        if cycle_total is not None:
+            self.total_cycles.setText(f"Total Cycle Number:\n{cycle_total}")
 
 
 class TemperatureInfo(QFrame):
 
-  def __init__(self, parent=None, temp=0, x=200, y=0, width=200, height=100):
-    super().__init__(parent)
-    self.setGeometry(x, y, width, height)
+    def __init__(self, parent=None, temp=0, x=200, y=0, width=200, height=100):
+        super().__init__(parent)
+        self.setGeometry(x, y, width, height)
 
-    layout = QVBoxLayout()
+        layout = QVBoxLayout()
 
-    self.temperature_label = QLabel(f"Temperature: {self.find_temp(temp)} C")
+        self.temperature_label = QLabel(f"Temperature: {self.find_temp(temp)} C")
 
-    layout.addWidget(self.temperature_label)
+        layout.addWidget(self.temperature_label)
 
-    self.setLayout(layout)
+        self.setLayout(layout)
 
-    self.setFrameShape(QFrame.Box)
-    self.setLineWidth(2)
-    self.setStyleSheet("""
+        self.setFrameShape(QFrame.Box)
+        self.setLineWidth(2)
+        self.setStyleSheet("""
             TemperatureInfo {
                 background-color: #000000;
                 border: 2px solid #333333;
@@ -534,15 +704,15 @@ class TemperatureInfo(QFrame):
             }
         """)
 
-  def find_temp(self, sensor_input):
-    if sensor_input == 0:
-      return "--"
-    else:
-      return sensor_input
+    def find_temp(self, sensor_input):
+        if sensor_input == 0:
+            return "--"
+        else:
+            return sensor_input
 
 
 if __name__ == "__main__":
-  app = QApplication(sys.argv)
-  window = MainWindow()
-  window.show()
-  sys.exit(app.exec())
+    app = QApplication(sys.argv)
+    window = MainWindow()
+    window.show()
+    sys.exit(app.exec())
