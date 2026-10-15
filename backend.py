@@ -109,6 +109,7 @@ class SystemStates(StateChart):
 
             if self.current_cycle % 2 != 0:
                 pin27.on()
+                sleep(.1)
                 logger.info(f"[Cycle {self.current_cycle}] PIN 27 set HIGH (3.3V)")
             else:
                 pin27.off()
@@ -117,7 +118,7 @@ class SystemStates(StateChart):
             pin17.on()
             sleep(self.sleep_test_val)
             pin17.off()
-            sleep(0.1)
+            sleep(0.001)
 
         if self.is_running and self.current_cycle >= self.target_cycles:
             logger.info("[Wear Test] Target cycles reached! Returning to Idle...")
