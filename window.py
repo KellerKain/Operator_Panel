@@ -1,6 +1,6 @@
 import json
 import sys
-from PySide6.QtCore import QDateTime, QTimer, Qt
+from PySide6.QtCore import QDateTime, QTimer, Qt, QThread, Signal
 from PySide6.QtGui import QColor, QDoubleValidator, QResizeEvent
 from PySide6.QtWidgets import (
     QApplication,
@@ -19,6 +19,48 @@ from PySide6.QtWidgets import (
 )
 import pyqtgraph as pg
 import zmq
+
+
+# --- BACKGROUND TELEMETRY LISTENER THREAD ---
+class TelemetryWorker(QThread):
+    """
+    Background QThread listening to ZeroMQ SUB socket (Port 5556).
+    Emits telemetry_received signal safely to the GUI thread.
+    """
+    telemetry_received = Signal(dict)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.running = True
+
+    def run(self):
+        context = zmq.Context()
+        sub_socket = context.socket(zmq.SUB)
+        sub_socket.setsockopt(zmq.RCVTIMEO, 1000)  # 1 second timeout
+        sub_socket.setsockopt(zmq.LINGER, 0)
+        sub_socket.setsockopt_string(zmq.SUBSCRIBE, "")  # Subscribe to all topics
+
+        try:
+            sub_socket.connect("tcp://127.0.0.1:5556")
+            print("[ZMQ Telemetry] Connected to SUB socket tcp://127.0.0.1:5556")
+        except Exception as e:
+            print(f"[ZMQ Error] TelemetryWorker failed to connect: {e}")
+
+        while self.running:
+            try:
+                data = sub_socket.recv_json()
+                self.telemetry_received.emit(data)
+            except zmq.Again:
+                pass  # Timeout hit, loop around
+            except Exception as e:
+                print(f"[ZMQ Error] Telemetry recv error: {e}")
+
+        sub_socket.close()
+        context.term()
+
+    def stop(self):
+        self.running = False
+        self.wait()
 
 
 # Circular Red Stop Button Class
@@ -125,8 +167,7 @@ class SettingsWindow(QMainWindow):
 
         self.pressure_input = QLineEdit()
         self.pressure_input.setPlaceholderText("Enter target pressure value...")
-        # Enforce numeric/float values only (0.0 to 10000.0 with 2 decimals)
-        self.pressure_input.setValidator(QDoubleValidator(0.0, 10000.0, 2, self))
+        self.pressure_input.setValidator(QDoubleValidator(0.00, 10000.0, 1, self))
         self.pressure_input.setStyleSheet("""
             QLineEdit {
                 padding: 8px;
@@ -541,8 +582,31 @@ class MainWindow(QMainWindow):
         sidebar_layout.addWidget(self.clock_label, alignment=Qt.AlignCenter)
         sidebar_layout.addStretch()
 
+        # Start Telemetry Subscriber Worker Thread
+        self.telemetry_thread = TelemetryWorker()
+        self.telemetry_thread.telemetry_received.connect(self.handle_telemetry)
+        self.telemetry_thread.start()
+
         self.showFullScreen()
         self.sidebar_frame.raise_()
+
+    def handle_telemetry(self, telemetry_data: dict):
+        """Processes telemetry payload from ZeroMQ SUB socket."""
+        # Update temperature widget with incoming Fahrenheit data
+        temp_f = telemetry_data.get("temperature_f", None)
+        temp_c = telemetry_data.get("temperature_c", None)
+
+        if temp_f is not None:
+            self.temp_info.update_temperature(temp_f)
+        elif temp_c is not None:
+            self.temp_info.update_temperature(temp_c, is_celsius=True)
+
+        # Update test info cycle counts if present
+        current_cycle = telemetry_data.get("current_cycle", None)
+        target_cycles = telemetry_data.get("target_cycles", None)
+        self.test_info.update_test_info(
+            cycle_live=current_cycle, cycle_total=target_cycles
+        )
 
     def stop_current_test(self):
         print("[Frontend] Emergency Stop Pressed! Sending 'stop' to backend...")
@@ -581,6 +645,8 @@ class MainWindow(QMainWindow):
             )
 
     def closeEvent(self, event):
+        if hasattr(self, "telemetry_thread"):
+            self.telemetry_thread.stop()
         self.zmq_socket.close()
         self.zmq_context.term()
         super().closeEvent(event)
@@ -677,6 +743,7 @@ class CurrentTestInfo(QFrame):
             self.total_cycles.setText(f"Total Cycle Number:\n{cycle_total}")
 
 
+# --- MODIFIED TEMPERATURE WIDGET ---
 class TemperatureInfo(QFrame):
 
     def __init__(self, parent=None, temp=0, x=200, y=0, width=200, height=100):
@@ -685,7 +752,7 @@ class TemperatureInfo(QFrame):
 
         layout = QVBoxLayout()
 
-        self.temperature_label = QLabel(f"Temperature: {self.find_temp(temp)} C")
+        self.temperature_label = QLabel(f"Temperature: {self.find_temp(temp)}")
 
         layout.addWidget(self.temperature_label)
 
@@ -705,10 +772,23 @@ class TemperatureInfo(QFrame):
         """)
 
     def find_temp(self, sensor_input):
-        if sensor_input == 0:
-            return "--"
+        if sensor_input == 0 or sensor_input == -999.0:
+            return "-- °F"
         else:
-            return sensor_input
+            return f"{sensor_input:.1f} °F"
+
+    def update_temperature(self, temp_val, is_celsius=False):
+        """Updates display text, converting C to F automatically if required."""
+        if temp_val is None or temp_val == -999.0:
+            self.temperature_label.setText("Temperature: -- °F")
+            return
+
+        if is_celsius:
+            temp_f = (temp_val * 9 / 5) + 32
+        else:
+            temp_f = temp_val
+
+        self.temperature_label.setText(f"Temperature: {temp_f:.1f} °F")
 
 
 if __name__ == "__main__":
