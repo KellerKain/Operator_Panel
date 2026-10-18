@@ -6,8 +6,7 @@ from time import sleep
 from statemachine import State, StateChart
 from statemachine.exceptions import TransitionNotAllowed
 import zmq
-import logging #allows for log file creation
-
+import logging #allows for log file creation\
 #Logging Setup
 logging.basicConfig(
     level=logging.INFO,

@@ -228,7 +228,6 @@ class SettingsWindow(QMainWindow):
                 self.zmq_socket.close()
             except Exception:
                 pass
-
         if self.zmq_context.closed:
             self.zmq_context = zmq.Context()
 
