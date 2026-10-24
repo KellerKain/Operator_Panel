@@ -21,21 +21,51 @@ logger = logging.getLogger("Backend")
 
 
 # Mock GPIO setup for non-Pi development vs Live Raspberry Pi 5
-S_PI = False
+IS_PI = False
+thermistor_channel = None
+hx = None
 
+# Specific check for thermistor I2C connection so not all dummy pins are used
 try:
-    from gpiozero import OutputDevice
     import board
     import busio
     import adafruit_ads1x15.ads1115 as ADS
     from adafruit_ads1x15.analog_in import AnalogIn
 
-    # Initialize I2C and ADS1115 instance
     i2c = busio.I2C(board.SCL, board.SDA)
     ads = ADS.ADS1115(i2c)
 
     # Pass integer 0 directly for Channel A0
     thermistor_channel = AnalogIn(ads, 0)
+
+except (ValueError, RuntimeError, OSError) as i2c_err:
+    # Specifically catches missing I2C devices, bus errors, or unacknowledged addresses
+    logger.warning(f"[I2C Warning] ADS1115 unavailable at 0x48 ({i2c_err}). Temperature telemetry will mock 25.0 C.")
+    IS_PI = True  # Keeps IS_PI True so motors remain functional if gpiozero succeeded
+except Exception as e:
+    logger.warning(f"[HW Warning] General hardware failure on I2C block ({e}).")
+
+# Dedicated HX711 Load Cell Initialization Block
+hx = None
+try:
+    from hx711_gpiozero import HX711
+
+    # Uses default SPI args: 24-bit resolution, Channel A Gain 128, 3.3V reference
+    hx = HX711(bits=24, channel_gain="A128", max_voltage=3.3)
+
+    # Define custom calibration constants locally (since the class lacks scale/offset attributes)
+    TARE_OFFSET = 0.150  # Resting normalized voltage/value
+    SCALE_RATIO = 0.0025   # Volts/value unit per pound
+
+    logger.info("[HW Info] HX711 AnalogInputDevice initialized successfully.")
+
+except Exception as e:
+    logger.warning(f"[HW Warning] HX711 hardware unavailable ({e}). Weight telemetry will mock 0.0 lbs.")
+    hx = None
+
+try:
+    from gpiozero import OutputDevice
+
     # Pins for NEMA Motors
     pin17 = OutputDevice(17, initial_value=False)
     pin22 = OutputDevice(22, initial_value=False)
@@ -49,10 +79,9 @@ try:
     pin24 = OutputDevice(24, initial_value=False)
     pin25 = OutputDevice(25, initial_value=False)
 
-
-
     IS_PI = True
     logger.info("[HW Info] Running on Raspberry Pi 5 hardware GPIO & ADS1115.")
+
 except Exception as e:
     logger.warning(f"[HW Warning] Hardware unavailable ({e}). Using Dummy Mocks.")
 
@@ -77,13 +106,39 @@ except Exception as e:
     pin25 = DummyPin(25)
 
 
+# --- WEIGHT SENSOR HELPER FUNCTION ---
+def read_weight_grams():
+    if not IS_PI or hx is None:
+        return 0.0
+
+    try:
+        # Pull the unscaled integer directly from the SPI word buffer
+        raw_val = hx._read()
+
+        # Temporary debug line to observe raw hardware output
+        logger.info(f"[HX711 Raw Debug] Raw ADC Int: {raw_val} | Normalized value: {hx.value}")
+
+        if raw_val is None:
+            return -999.0
+
+        # Calibration math using raw integer counts instead of normalized floats
+        TARE_OFFSET = 51921
+        SCALE_RATIO = 21000.0  # Replace with (loaded_raw - TARE_OFFSET) / target_grams
+
+        weight_grams = (raw_val - TARE_OFFSET) / SCALE_RATIO
+        return round(float(weight_grams), 2)
+
+    except Exception as err:
+        logger.error(f"[Scale Error] Failed to read weight sensor: {err}")
+        return -999.0
+
 # --- THERMISTOR HELPER FUNCTION ---
 def read_temperature_celsius():
     """
     Reads voltage from ADS1115 Channel 0 and calculates temperature
     using NTC 100K 3950 Steinhart-Hart / Beta model.
     """
-    if not IS_PI:
+    if not IS_PI or thermistor_channel is None:
         # Mock temperature reading for local testing
         return 25.0
 
@@ -127,9 +182,18 @@ def start_telemetry_publisher(state_machine):
             temp_c = read_temperature_celsius()
             temp_f = round((temp_c * 9 / 5) + 32, 2) if temp_c != -999.0 else -999.0
 
+            # Read weight in grams and calculate pounds
+            weight_g = read_weight_grams()
+            if weight_g != -999.0:
+                weight_lb = round(weight_g / 453.59237, 2)
+            else:
+                weight_lb = -999.0
+
             telemetry_data = {
                 "temperature_c": temp_c,
                 "temperature_f": temp_f,
+                "weight_g": weight_g,
+                "weight_lb": weight_lb,
                 "current_state": state_machine.current_state_value,
                 "current_cycle": state_machine.current_cycle,
                 "target_cycles": state_machine.target_cycles,

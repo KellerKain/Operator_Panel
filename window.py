@@ -432,7 +432,7 @@ class TestsWindow(QMainWindow):
             print(f"[ZMQ Error] TestsWindow failed to connect: {e}")
 
     def send_zmq_command(
-        self, command: str, display_name: str, payload_data: dict = None
+            self, command: str, display_name: str, payload_data: dict = None
     ):
         """Sends command JSON payload to backend state machine."""
         print(f"[Frontend] Sending command to backend: '{command}'")
@@ -501,7 +501,7 @@ class MainWindow(QMainWindow):
             10000,
             parent=self.central_widget,
             x=800,
-            y=120,
+            y=190,
             width=220,
             height=120,
         )
@@ -509,9 +509,14 @@ class MainWindow(QMainWindow):
             parent=self.central_widget, x=800, y=50, width=220, height=60
         )
 
+        # New HX711 Weight Display Widget (placed directly below Temperature widget)
+        self.weight_info = WeightInfo(
+            parent=self.central_widget, x=800, y=120, width=220, height=60
+        )
+
         # Stop Button
         self.stop_btn = StopButton(
-            parent=self.central_widget, x=840, y=260, size=140
+            parent=self.central_widget, x=840, y=320, size=140
         )
         self.stop_btn.clicked.connect(self.stop_current_test)
 
@@ -591,7 +596,7 @@ class MainWindow(QMainWindow):
 
     def handle_telemetry(self, telemetry_data: dict):
         """Processes telemetry payload from ZeroMQ SUB socket."""
-        # Update temperature widget with incoming Fahrenheit data
+        # Update temperature widget
         temp_f = telemetry_data.get("temperature_f", None)
         temp_c = telemetry_data.get("temperature_c", None)
 
@@ -600,7 +605,16 @@ class MainWindow(QMainWindow):
         elif temp_c is not None:
             self.temp_info.update_temperature(temp_c, is_celsius=True)
 
-        # Update test info cycle counts if present
+        # Update weight widget with incoming lbs or grams telemetry
+        weight_lb = telemetry_data.get("weight_lb", None)
+        weight_g = telemetry_data.get("weight_g", None)
+
+        if weight_lb is not None:
+            self.weight_info.update_weight(weight_lb)
+        elif weight_g is not None:
+            self.weight_info.update_weight(weight_g, is_grams=True)
+
+        # Update test info cycle counts
         current_cycle = telemetry_data.get("current_cycle", None)
         target_cycles = telemetry_data.get("target_cycles", None)
         self.test_info.update_test_info(
@@ -691,15 +705,15 @@ class CycleTime(QWidget):
 class CurrentTestInfo(QFrame):
 
     def __init__(
-        self,
-        current_test_name,
-        cycle_number_live,
-        cycle_number_total,
-        parent=None,
-        x=0,
-        y=0,
-        width=200,
-        height=100,
+            self,
+            current_test_name,
+            cycle_number_live,
+            cycle_number_total,
+            parent=None,
+            x=0,
+            y=0,
+            width=200,
+            height=100,
     ):
         super().__init__(parent)
         self.setGeometry(x, y, width, height)
@@ -732,7 +746,7 @@ class CurrentTestInfo(QFrame):
         """)
 
     def update_test_info(
-        self, test_name=None, cycle_live=None, cycle_total=None
+            self, test_name=None, cycle_live=None, cycle_total=None
     ):
         if test_name is not None:
             self.current_test.setText(f"Current Test: {test_name}")
@@ -742,7 +756,7 @@ class CurrentTestInfo(QFrame):
             self.total_cycles.setText(f"Total Cycle Number:\n{cycle_total}")
 
 
-# --- MODIFIED TEMPERATURE WIDGET ---
+# --- TEMPERATURE WIDGET ---
 class TemperatureInfo(QFrame):
 
     def __init__(self, parent=None, temp=0, x=200, y=0, width=200, height=100):
@@ -788,6 +802,54 @@ class TemperatureInfo(QFrame):
             temp_f = temp_val
 
         self.temperature_label.setText(f"Temperature: {temp_f:.1f} °F")
+
+
+
+class WeightInfo(QFrame):
+
+    def __init__(self, parent=None, weight=0, x=200, y=0, width=200, height=100):
+        super().__init__(parent)
+        self.setGeometry(x, y, width, height)
+
+        layout = QVBoxLayout()
+
+        self.weight_label = QLabel(f"Packing Pressure: {self.format_weight(weight)}")
+
+        layout.addWidget(self.weight_label)
+
+        self.setLayout(layout)
+
+        self.setFrameShape(QFrame.Box)
+        self.setLineWidth(2)
+        self.setStyleSheet("""
+            WeightInfo {
+                background-color: #000000;
+                border: 2px solid #333333;
+                border-radius: 6px;
+            }
+            QLabel {
+                color: #ffffff;
+            }
+        """)
+
+    def format_weight(self, weight_input):
+        if weight_input == 0 or weight_input == -999.0:
+            return "-- lbs"
+        else:
+            return f"{weight_input:.2f} lbs"
+
+    def update_weight(self, weight_val, is_grams=False):
+        """Updates display text, converting grams to lbs automatically if required."""
+        if weight_val is None or weight_val == -999.0:
+            self.weight_label.setText("Weight: -- lbs")
+            return
+
+        if is_grams:
+            weight_lb = weight_val / 453.59237
+        else:
+            weight_lb = weight_val
+
+        self.weight_label.setText(f"Weight: {weight_lb:.2f} lbs")
 
 
 if __name__ == "__main__":
