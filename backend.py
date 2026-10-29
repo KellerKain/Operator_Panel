@@ -7,6 +7,9 @@ from statemachine import State, StateChart
 from statemachine.exceptions import TransitionNotAllowed
 import zmq
 import logging #allows for log file creation\
+import os
+import csv
+from datetime import datetime as dt
 #Logging Setup
 logging.basicConfig(
     level=logging.INFO,
@@ -19,7 +22,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("Backend")
 
-
+global run_time
 # Mock GPIO setup for non-Pi development vs Live Raspberry Pi 5
 IS_PI = False
 thermistor_channel = None
@@ -177,6 +180,7 @@ def start_telemetry_publisher(state_machine):
     pub_socket.bind("tcp://127.0.0.1:5556")
     logger.info("[Backend] Telemetry PUB server running on tcp://127.0.0.1:5556")
 
+
     while True:
         try:
             temp_c = read_temperature_celsius()
@@ -190,9 +194,8 @@ def start_telemetry_publisher(state_machine):
                 weight_lb = -999.0
 
             telemetry_data = {
-                "temperature_c": temp_c,
+                "time": run_time,
                 "temperature_f": temp_f,
-                "weight_g": weight_g,
                 "weight_lb": weight_lb,
                 "current_state": state_machine.current_state_value,
                 "current_cycle": state_machine.current_cycle,
@@ -200,6 +203,8 @@ def start_telemetry_publisher(state_machine):
             }
             pub_socket.send_json(telemetry_data)
             logger.info("[Backend] Telemetry data sent")
+
+
 
         except Exception as err:
             logger.error(f"[Telemetry Error] {err}")
@@ -434,6 +439,37 @@ def run_backend_zmq_listener(state_machine):
         socket.close()
         context.term()
 
+
+def CSV_Logging(telemetry_data, csv_filename):
+    """
+    Appends a single telemetry dictionary record to a CSV file.
+    Creates the file and writes headers on the first run.
+    """
+    headers = [
+        "time",
+        "temperature_c",
+        "temperature_f",
+        "weight_g",
+        "weight_lb",
+        "current_state",
+        "current_cycle",
+        "target_cycles",
+    ]
+
+    file_exists = os.path.exists(csv_filename)
+
+    try:
+        with open(csv_filename, mode="a", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=headers)
+
+            # Write headers if the CSV file was just created
+            if not file_exists:
+                writer.writeheader()
+
+            writer.writerow(telemetry_data)
+
+    except Exception as err:
+        logger.error(f"[CSV Log Error] Failed to write record: {err}")
 
 if __name__ == "__main__":
     sm = SystemStates()
