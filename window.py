@@ -1,5 +1,7 @@
 import json
 import sys
+import collections
+import time
 from PySide6.QtCore import QDateTime, QTimer, Qt, QThread, Signal
 from PySide6.QtGui import QColor, QDoubleValidator, QResizeEvent
 from PySide6.QtWidgets import (
@@ -19,6 +21,16 @@ from PySide6.QtWidgets import (
 )
 import pyqtgraph as pg
 import zmq
+
+
+# --- CUSTOM PYQTGRAPH AXIS FOR INTEGER-ONLY TICKS ---
+class IntAxisItem(pg.AxisItem):
+    """
+    Custom PyQtGraph AxisItem that forces string tick labels to display
+    strictly as whole integers without fractional decimal places.
+    """
+    def tickStrings(self, values, scale, spacing):
+        return [f"{int(round(v))}" for v in values]
 
 
 # --- BACKGROUND TELEMETRY LISTENER THREAD ---
@@ -477,7 +489,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.tests_window = None
         self.settings_window = None
-        self.setWindowTitle("Operator Panel - Fixed Position Graph")
+        self.setWindowTitle("Operator Panel - Live Temperature Plot")
 
         self.zmq_context = zmq.Context()
         self.zmq_socket = self.zmq_context.socket(zmq.REQ)
@@ -505,11 +517,13 @@ class MainWindow(QMainWindow):
             width=220,
             height=120,
         )
-        self.temp_info = TemperatureInfo(
+
+        # Breakaway Torque Display Widget (Replaces original Temperature display slot)
+        self.torque_info = TorqueInfo(
             parent=self.central_widget, x=800, y=50, width=220, height=60
         )
 
-        # New HX711 Weight Display Widget (placed directly below Temperature widget)
+        # Packing Force / Weight Display Widget
         self.weight_info = WeightInfo(
             parent=self.central_widget, x=800, y=120, width=220, height=60
         )
@@ -520,15 +534,31 @@ class MainWindow(QMainWindow):
         )
         self.stop_btn.clicked.connect(self.stop_current_test)
 
-        # PlotWidget
-        self.graph_widget = pg.PlotWidget(self.central_widget)
-        self.graph_widget.setTitle(
-            "Live System Telemetry", color="k", size="12pt"
+        # Custom integer-only X-axis item
+        axis_x_item = IntAxisItem(orientation='bottom')
+
+        # PlotWidget setup for live temperature stream using integer-only axis
+        self.graph_widget = pg.PlotWidget(
+            self.central_widget,
+            axisItems={'bottom': axis_x_item}
         )
+        self.graph_widget.setTitle(
+            "Live Temperature Telemetry (°F)", color="k", size="12pt"
+        )
+        self.graph_widget.setLabel("left", "Temperature (°F)", color="k")
+        self.graph_widget.setLabel("bottom", "Time History (Seconds)", color="k")
         self.graph_widget.showGrid(x=True, y=True, alpha=0.3)
 
         pen = pg.mkPen(color=(220, 50, 50), width=2)
         self.data_line = self.graph_widget.plot([], [], pen=pen)
+
+        # Rolling temperature data ring buffer (stores up to 600 data points for 5+ minutes)
+        self.time_buffer = collections.deque(maxlen=600)
+        self.temp_buffer = collections.deque(maxlen=600)
+        self.start_time = time.time()
+
+        # Initial view: locked to 0 to 300 seconds (5 minutes)
+        self.graph_widget.setXRange(0, 300, padding=0)
 
         self.graph_x = 260
         self.graph_y = 50
@@ -596,16 +626,41 @@ class MainWindow(QMainWindow):
 
     def handle_telemetry(self, telemetry_data: dict):
         """Processes telemetry payload from ZeroMQ SUB socket."""
-        # Update temperature widget
+        # 1. Update live graph with temperature reading
         temp_f = telemetry_data.get("temperature_f", None)
         temp_c = telemetry_data.get("temperature_c", None)
 
-        if temp_f is not None:
-            self.temp_info.update_temperature(temp_f)
-        elif temp_c is not None:
-            self.temp_info.update_temperature(temp_c, is_celsius=True)
+        if temp_f is None and temp_c is not None and temp_c != -999.0:
+            temp_f = (temp_c * 9 / 5) + 32
 
-        # Update weight widget with incoming lbs or grams telemetry
+        if temp_f is not None and temp_f != -999.0:
+            # Round temperature to whole integer degrees
+            temp_f_rounded = int(round(temp_f))
+            elapsed_seconds = int(time.time() - self.start_time)
+
+            self.time_buffer.append(elapsed_seconds)
+            self.temp_buffer.append(temp_f_rounded)
+
+            # Update pyqtgraph line data
+            self.data_line.setData(list(self.time_buffer), list(self.temp_buffer))
+
+            # Maintain trailing 5-minute (300 seconds) integer window
+            window_size = 300
+            if elapsed_seconds > window_size:
+                self.graph_widget.setXRange(elapsed_seconds - window_size, elapsed_seconds, padding=0)
+            else:
+                self.graph_widget.setXRange(0, window_size, padding=0)
+
+        # 2. Update breakaway torque widget
+        torque_ftlb = telemetry_data.get("torque_ftlb", None)
+        torque_nm = telemetry_data.get("torque_nm", None)
+
+        if torque_ftlb is not None:
+            self.torque_info.update_torque(torque_ftlb)
+        elif torque_nm is not None:
+            self.torque_info.update_torque(torque_nm, is_nm=True)
+
+        # 3. Update packing pressure weight widget
         weight_lb = telemetry_data.get("weight_lb", None)
         weight_g = telemetry_data.get("weight_g", None)
 
@@ -614,7 +669,7 @@ class MainWindow(QMainWindow):
         elif weight_g is not None:
             self.weight_info.update_weight(weight_g, is_grams=True)
 
-        # Update test info cycle counts
+        # 4. Update test info cycle counts
         current_cycle = telemetry_data.get("current_cycle", None)
         target_cycles = telemetry_data.get("target_cycles", None)
         self.test_info.update_test_info(
@@ -756,25 +811,25 @@ class CurrentTestInfo(QFrame):
             self.total_cycles.setText(f"Total Cycle Number:\n{cycle_total}")
 
 
-# --- TEMPERATURE WIDGET ---
-class TemperatureInfo(QFrame):
+# --- BREAKAWAY TORQUE DISPLAY WIDGET ---
+class TorqueInfo(QFrame):
 
-    def __init__(self, parent=None, temp=0, x=200, y=0, width=200, height=100):
+    def __init__(self, parent=None, torque=0, x=200, y=0, width=200, height=100):
         super().__init__(parent)
         self.setGeometry(x, y, width, height)
 
         layout = QVBoxLayout()
 
-        self.temperature_label = QLabel(f"Temperature: {self.find_temp(temp)}")
+        self.torque_label = QLabel(f"Breakaway Torque: {self.format_torque(torque)}")
 
-        layout.addWidget(self.temperature_label)
+        layout.addWidget(self.torque_label)
 
         self.setLayout(layout)
 
         self.setFrameShape(QFrame.Box)
         self.setLineWidth(2)
         self.setStyleSheet("""
-            TemperatureInfo {
+            TorqueInfo {
                 background-color: #000000;
                 border: 2px solid #333333;
                 border-radius: 6px;
@@ -784,27 +839,27 @@ class TemperatureInfo(QFrame):
             }
         """)
 
-    def find_temp(self, sensor_input):
-        if sensor_input == 0 or sensor_input == -999.0:
-            return "-- °F"
+    def format_torque(self, torque_input):
+        if torque_input == 0 or torque_input == -999.0:
+            return "-- ft-lbs"
         else:
-            return f"{sensor_input:.1f} °F"
+            return f"{torque_input:.2f} ft-lbs"
 
-    def update_temperature(self, temp_val, is_celsius=False):
-        """Updates display text, converting C to F automatically if required."""
-        if temp_val is None or temp_val == -999.0:
-            self.temperature_label.setText("Temperature: -- °F")
+    def update_torque(self, torque_val, is_nm=False):
+        """Updates display text, converting N-m to ft-lbs if required."""
+        if torque_val is None or torque_val == -999.0:
+            self.torque_label.setText("Breakaway Torque: -- ft-lbs")
             return
 
-        if is_celsius:
-            temp_f = (temp_val * 9 / 5) + 32
+        if is_nm:
+            torque_ftlb = torque_val / 1.3558179483
         else:
-            temp_f = temp_val
+            torque_ftlb = torque_val
 
-        self.temperature_label.setText(f"Temperature: {temp_f:.1f} °F")
+        self.torque_label.setText(f"Breakaway Torque: {torque_ftlb:.2f} ft-lbs")
 
 
-
+# --- PACKING FORCE / WEIGHT WIDGET ---
 class WeightInfo(QFrame):
 
     def __init__(self, parent=None, weight=0, x=200, y=0, width=200, height=100):
@@ -841,7 +896,7 @@ class WeightInfo(QFrame):
     def update_weight(self, weight_val, is_grams=False):
         """Updates display text, converting grams to lbs automatically if required."""
         if weight_val is None or weight_val == -999.0:
-            self.weight_label.setText("Weight: -- lbs")
+            self.weight_label.setText("Packing Pressure: -- lbs")
             return
 
         if is_grams:
@@ -849,7 +904,7 @@ class WeightInfo(QFrame):
         else:
             weight_lb = weight_val
 
-        self.weight_label.setText(f"Weight: {weight_lb:.2f} lbs")
+        self.weight_label.setText(f"Packing Pressure: {weight_lb:.2f} lbs")
 
 
 if __name__ == "__main__":
