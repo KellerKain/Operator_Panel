@@ -483,13 +483,14 @@ class TestsWindow(QMainWindow):
 
 
 # Full MainWindow Class
+# Full MainWindow Class
 class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
         self.tests_window = None
         self.settings_window = None
-        self.setWindowTitle("Operator Panel - Live Temperature Plot")
+        self.setWindowTitle("Operator Panel - Live Temperature & Pressure Plot")
 
         self.zmq_context = zmq.Context()
         self.zmq_socket = self.zmq_context.socket(zmq.REQ)
@@ -518,7 +519,7 @@ class MainWindow(QMainWindow):
             height=120,
         )
 
-        # Breakaway Torque Display Widget (Replaces original Temperature display slot)
+        # Breakaway Torque Display Widget
         self.torque_info = TorqueInfo(
             parent=self.central_widget, x=800, y=50, width=220, height=60
         )
@@ -534,7 +535,7 @@ class MainWindow(QMainWindow):
         )
         self.stop_btn.clicked.connect(self.stop_current_test)
 
-        # Custom integer-only X-axis item
+        # Custom integer-only X-axis item for temperature graph
         axis_x_item = IntAxisItem(orientation='bottom')
 
         # PlotWidget setup for live temperature stream using integer-only axis
@@ -552,7 +553,7 @@ class MainWindow(QMainWindow):
         pen = pg.mkPen(color=(220, 50, 50), width=2)
         self.data_line = self.graph_widget.plot([], [], pen=pen)
 
-        # Rolling temperature data ring buffer (stores up to 600 data points for 5+ minutes)
+        # Rolling temperature data ring buffer
         self.time_buffer = collections.deque(maxlen=600)
         self.temp_buffer = collections.deque(maxlen=600)
         self.start_time = time.time()
@@ -560,6 +561,7 @@ class MainWindow(QMainWindow):
         # Initial view: locked to 0 to 300 seconds (5 minutes)
         self.graph_widget.setXRange(0, 300, padding=0)
 
+        # Define geometry variables FIRST
         self.graph_x = 260
         self.graph_y = 50
         self.graph_width = 500
@@ -568,6 +570,9 @@ class MainWindow(QMainWindow):
         self.graph_widget.setGeometry(
             self.graph_x, self.graph_y, self.graph_width, self.graph_height
         )
+
+        # Now setup pressure graph after layout geometry variables are defined
+        self.setup_pressure_graph()
 
         # Sidebar Setup
         self.sidebar_frame = QFrame(self.central_widget)
@@ -624,34 +629,74 @@ class MainWindow(QMainWindow):
         self.showFullScreen()
         self.sidebar_frame.raise_()
 
+    def setup_pressure_graph(self):
+        """Initializes and positions the second plot for live pressure."""
+        self.pressure_graph_widget = pg.PlotWidget(self.central_widget)
+
+        self.pressure_graph_widget.setTitle(
+            "Live Pressure Telemetry (PSI)", color="k", size="12pt"
+        )
+        self.pressure_graph_widget.setLabel("left", "Pressure (PSI)", color="k")
+        self.pressure_graph_widget.setLabel("bottom", "Time History (Seconds)", color="k")
+        self.pressure_graph_widget.showGrid(x=True, y=True, alpha=0.3)
+
+        pen = pg.mkPen(color=(30, 144, 255), width=2)
+        self.pressure_data_line = self.pressure_graph_widget.plot([], [], pen=pen)
+
+        self.pressure_buffer = collections.deque(maxlen=600)
+
+        self.pressure_graph_widget.setXRange(0, 300, padding=0)
+
+        self.pressure_graph_y = self.graph_y + self.graph_height + 20
+        self.pressure_graph_widget.setGeometry(
+            self.graph_x,
+            self.pressure_graph_y,
+            self.graph_width,
+            self.graph_height,
+        )
+
     def handle_telemetry(self, telemetry_data: dict):
         """Processes telemetry payload from ZeroMQ SUB socket."""
-        # 1. Update live graph with temperature reading
+        # 1. Update live temperature graph (rounded to integer)
         temp_f = telemetry_data.get("temperature_f", None)
         temp_c = telemetry_data.get("temperature_c", None)
 
         if temp_f is None and temp_c is not None and temp_c != -999.0:
             temp_f = (temp_c * 9 / 5) + 32
 
-        if temp_f is not None and temp_f != -999.0:
-            # Round temperature to whole integer degrees
-            temp_f_rounded = int(round(temp_f))
-            elapsed_seconds = int(time.time() - self.start_time)
+        elapsed_seconds = int(time.time() - self.start_time)
 
+        if temp_f is not None and temp_f != -999.0:
+            temp_f_rounded = int(round(temp_f))
             self.time_buffer.append(elapsed_seconds)
             self.temp_buffer.append(temp_f_rounded)
 
-            # Update pyqtgraph line data
             self.data_line.setData(list(self.time_buffer), list(self.temp_buffer))
 
-            # Maintain trailing 5-minute (300 seconds) integer window
             window_size = 300
             if elapsed_seconds > window_size:
                 self.graph_widget.setXRange(elapsed_seconds - window_size, elapsed_seconds, padding=0)
             else:
                 self.graph_widget.setXRange(0, window_size, padding=0)
 
-        # 2. Update breakaway torque widget
+        # 2. Update live pressure graph (float precision preserved)
+        pressure_psi = telemetry_data.get("pressure_psi", None)
+        pressure_bar = telemetry_data.get("pressure_bar", None)
+
+        if pressure_psi is None and pressure_bar is not None and pressure_bar != -999.0:
+            pressure_psi = pressure_bar * 14.5037738
+
+        if pressure_psi is not None and pressure_psi != -999.0:
+            self.pressure_buffer.append(float(pressure_psi))
+            self.pressure_data_line.setData(list(self.time_buffer), list(self.pressure_buffer))
+
+            window_size = 300
+            if elapsed_seconds > window_size:
+                self.pressure_graph_widget.setXRange(elapsed_seconds - window_size, elapsed_seconds, padding=0)
+            else:
+                self.pressure_graph_widget.setXRange(0, window_size, padding=0)
+
+        # 3. Update breakaway torque widget
         torque_ftlb = telemetry_data.get("torque_ftlb", None)
         torque_nm = telemetry_data.get("torque_nm", None)
 
@@ -660,7 +705,7 @@ class MainWindow(QMainWindow):
         elif torque_nm is not None:
             self.torque_info.update_torque(torque_nm, is_nm=True)
 
-        # 3. Update packing pressure weight widget
+        # 4. Update packing pressure weight widget
         weight_lb = telemetry_data.get("weight_lb", None)
         weight_g = telemetry_data.get("weight_g", None)
 
@@ -669,7 +714,7 @@ class MainWindow(QMainWindow):
         elif weight_g is not None:
             self.weight_info.update_weight(weight_g, is_grams=True)
 
-        # 4. Update test info cycle counts
+        # 5. Update test info cycle counts
         current_cycle = telemetry_data.get("current_cycle", None)
         target_cycles = telemetry_data.get("target_cycles", None)
         self.test_info.update_test_info(

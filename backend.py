@@ -23,6 +23,7 @@ logger = logging.getLogger("Backend")
 # Global state / hardware handles
 IS_PI = False
 thermistor_channel = None
+pressure_channel = None
 hx = None
 hx_torque = None
 
@@ -32,6 +33,7 @@ class BitBangHX711:
     """
     Software bit-banging driver for HX711 allowing custom GPIO pin mapping.
     """
+
     def __init__(self, dout_pin: int, sck_pin: int, gain: int = 128):
         from gpiozero import DigitalInputDevice, DigitalOutputDevice
 
@@ -75,7 +77,7 @@ class BitBangHX711:
         return count
 
 
-# --- ADS1115 THERMISTOR INITIALIZATION ---
+# --- ADS1115 THERMISTOR & PRESSURE TRANSDUCER INITIALIZATION ---
 try:
     import board
     import busio
@@ -84,10 +86,16 @@ try:
 
     i2c = busio.I2C(board.SCL, board.SDA)
     ads = ADS.ADS1115(i2c)
+
+    # Thermistor on ADS1115 Channel A0
     thermistor_channel = AnalogIn(ads, 0)
 
+    # Pressure Transducer on unused ADS1115 Channel A1 (Unused Pin)
+    pressure_channel = AnalogIn(ads, 1)
+
 except (ValueError, RuntimeError, OSError) as i2c_err:
-    logger.warning(f"[I2C Warning] ADS1115 unavailable at 0x48 ({i2c_err}). Temperature telemetry will mock 25.0 C.")
+    logger.warning(
+        f"[I2C Warning] ADS1115 unavailable at 0x48 ({i2c_err}). Temperature & Pressure telemetry will mock defaults.")
     IS_PI = True
 except Exception as e:
     logger.warning(f"[HW Warning] General hardware failure on I2C block ({e}).")
@@ -204,11 +212,15 @@ try:
 except Exception as e:
     logger.warning(f"[HW Warning] Hardware unavailable ({e}). Using Dummy Mocks.")
 
+
     class DummyPin:
         def __init__(self, pin_num):
             self.pin_num = pin_num
+
         def off(self): pass
+
         def on(self): pass
+
 
     pin17 = DummyPin(17)
     pin22 = DummyPin(22)
@@ -283,6 +295,31 @@ def read_temperature_celsius():
         return -999.0
 
 
+def read_pressure_psi(v_min: float = 0.5, v_max: float = 4.5, p_max_psi: float = 10000.0) -> float:
+    """
+    Reads voltage from ADS1115 Pin A1 and calculates pressure with float precision.
+    Standard industrial transducer curve: 0.5V to 4.5V maps linearly to 0 to 10,000 PSI.
+    """
+    if not IS_PI or pressure_channel is None:
+        return 0.0
+
+    try:
+        voltage = pressure_channel.voltage
+
+        # Clamp voltage boundaries
+        if voltage < v_min:
+            voltage = v_min
+        elif voltage > v_max:
+            voltage = v_max
+
+        # Linear transfer curve to float PSI
+        pressure_psi = ((voltage - v_min) / (v_max - v_min)) * p_max_psi
+        return float(round(pressure_psi, 2))
+    except Exception as err:
+        logger.error(f"[Pressure Transducer Error] Failed to read sensor: {err}")
+        return -999.0
+
+
 # --- ZMQ TELEMETRY PUBLISHER THREAD ---
 def start_telemetry_publisher(state_machine):
     """Publishes live telemetry every 1 second over tcp://127.0.0.1:5556."""
@@ -296,6 +333,14 @@ def start_telemetry_publisher(state_machine):
         try:
             temp_c = read_temperature_celsius()
             temp_f = round((temp_c * 9 / 5) + 32, 2) if temp_c != -999.0 else -999.0
+
+            # Read Pressure Transducer float precision (PSI & Bar conversion)
+            pressure_psi = read_pressure_psi()
+            if pressure_psi != -999.0:
+                pressure_bar = round(pressure_psi * 0.0689475729, 3)
+            else:
+                pressure_psi = -999.0
+                pressure_bar = -999.0
 
             weight_lb = read_weight_lbs()
             if weight_lb is not None:
@@ -317,6 +362,8 @@ def start_telemetry_publisher(state_machine):
             telemetry_data = {
                 "temperature_c": temp_c,
                 "temperature_f": temp_f,
+                "pressure_psi": pressure_psi,
+                "pressure_bar": pressure_bar,
                 "weight_g": weight_g,
                 "weight_lb": weight_lb,
                 "packing_force_N": packing_force_n,
