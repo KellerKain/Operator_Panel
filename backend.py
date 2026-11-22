@@ -1,12 +1,15 @@
+import csv
 import json
+import logging
+import math
+import os
 import sys
 import threading
-import math
+import time
 from time import sleep
 from statemachine import State, StateChart
 from statemachine.exceptions import TransitionNotAllowed
 import zmq
-import logging
 
 # Logging Setup
 logging.basicConfig(
@@ -23,6 +26,7 @@ logger = logging.getLogger("Backend")
 # Global state / hardware handles
 IS_PI = False
 thermistor_channel = None
+pressure_channel = None
 hx = None
 hx_torque = None
 
@@ -32,13 +36,13 @@ class BitBangHX711:
     """
     Software bit-banging driver for HX711 allowing custom GPIO pin mapping.
     """
+
     def __init__(self, dout_pin: int, sck_pin: int, gain: int = 128):
         from gpiozero import DigitalInputDevice, DigitalOutputDevice
 
         self.dout = DigitalInputDevice(dout_pin)
         self.sck = DigitalOutputDevice(sck_pin, initial_value=False)
 
-        # Gain clock pulses: 128 gain = 25 pulses, 32 gain = 26 pulses, 64 gain = 27 pulses
         if gain == 128:
             self.pulses = 25
         elif gain == 32:
@@ -49,12 +53,11 @@ class BitBangHX711:
             self.pulses = 25
 
     def _read(self):
-        # Wait for DOUT to go LOW (data ready)
         timeout = 0
         while self.dout.value == 1:
             sleep(0.001)
             timeout += 1
-            if timeout > 100:  # Sensor not responding or disconnected
+            if timeout > 100:
                 return None
 
         count = 0
@@ -63,19 +66,17 @@ class BitBangHX711:
             count = (count << 1) | self.dout.value
             self.sck.off()
 
-        # Set gain for next conversion by pulsing SCK extra times
         for _ in range(self.pulses - 24):
             self.sck.on()
             self.sck.off()
 
-        # Convert 24-bit 2's complement signed integer
         if count & 0x800000:
             count -= 0x1000000
 
         return count
 
 
-# --- ADS1115 THERMISTOR INITIALIZATION ---
+# --- ADS1115 THERMISTOR & PRESSURE TRANSDUCER INITIALIZATION ---
 try:
     import board
     import busio
@@ -84,10 +85,14 @@ try:
 
     i2c = busio.I2C(board.SCL, board.SDA)
     ads = ADS.ADS1115(i2c)
+
     thermistor_channel = AnalogIn(ads, 0)
+    pressure_channel = AnalogIn(ads, 1)
 
 except (ValueError, RuntimeError, OSError) as i2c_err:
-    logger.warning(f"[I2C Warning] ADS1115 unavailable at 0x48 ({i2c_err}). Temperature telemetry will mock 25.0 C.")
+    logger.warning(
+        f"[I2C Warning] ADS1115 unavailable at 0x48 ({i2c_err}). Temperature & Pressure telemetry will mock defaults."
+    )
     IS_PI = True
 except Exception as e:
     logger.warning(f"[HW Warning] General hardware failure on I2C block ({e}).")
@@ -97,7 +102,6 @@ hx = None
 try:
     from hx711_gpiozero import HX711
 
-    # Pin 21 (GPIO 9 MISO), Pin 23 (GPIO 11 SCLK)
     hx = HX711(bits=24, channel_gain="A128", max_voltage=3.3)
 
     TARE_OFFSET = 54686.0
@@ -106,22 +110,27 @@ try:
     logger.info("[HW Info] Primary HX711 (Packing Force) initialized on SPI0.0.")
 
 except Exception as e:
-    logger.warning(f"[HW Warning] Primary HX711 hardware unavailable ({e}). Weight telemetry will mock 0.0 lbs.")
+    logger.warning(
+        f"[HW Warning] Primary HX711 hardware unavailable ({e}). Weight telemetry will mock 0.0 lbs."
+    )
     hx = None
 
 # --- SECONDARY HX711 LOAD CELL (BREAKAWAY TORQUE - BIT-BANG GPIO 5 & 6) ---
 hx_torque = None
 try:
-    # Uses BitBangHX711 on GPIO 5 (Pin 29) DOUT & GPIO 6 (Pin 31) SCK
     hx_torque = BitBangHX711(dout_pin=5, sck_pin=6, gain=128)
 
     TORQUE_TARE_OFFSET = 0.0
-    TORQUE_SCALE_RATIO = 1000.0  # Raw counts per ft-lb
+    TORQUE_SCALE_RATIO = 1000.0
 
-    logger.info("[HW Info] Secondary HX711 (Torque Sensor) initialized via bit-bang on GPIO 5/6.")
+    logger.info(
+        "[HW Info] Secondary HX711 (Torque Sensor) initialized via bit-bang on GPIO 5/6."
+    )
 
 except Exception as e:
-    logger.warning(f"[HW Warning] Secondary HX711 hardware unavailable ({e}). Torque telemetry will mock 0.0 ft-lb.")
+    logger.warning(
+        f"[HW Warning] Secondary HX711 hardware unavailable ({e}). Torque telemetry will mock 0.0 ft-lb."
+    )
     hx_torque = None
 
 
@@ -199,7 +208,9 @@ try:
     pin25 = OutputDevice(25, initial_value=False)
 
     IS_PI = True
-    logger.info("[HW Info] Running on Raspberry Pi 5 hardware GPIO & ADS1115.")
+    logger.info(
+        "[HW Info] Running on Raspberry Pi 5 hardware GPIO & ADS1115."
+    )
 
 except Exception as e:
     logger.warning(f"[HW Warning] Hardware unavailable ({e}). Using Dummy Mocks.")
@@ -207,8 +218,12 @@ except Exception as e:
     class DummyPin:
         def __init__(self, pin_num):
             self.pin_num = pin_num
-        def off(self): pass
-        def on(self): pass
+
+        def off(self):
+            pass
+
+        def on(self):
+            pass
 
     pin17 = DummyPin(17)
     pin22 = DummyPin(22)
@@ -240,9 +255,6 @@ def read_weight_lbs():
 
 
 def read_breakaway_torque_ftlb():
-    """
-    Reads raw counts from secondary bit-banged HX711 and calculates torque in ft-lbs.
-    """
     if hx_torque is None:
         return None
 
@@ -283,9 +295,118 @@ def read_temperature_celsius():
         return -999.0
 
 
+def read_pressure_psi(
+    v_min: float = 0.5, v_max: float = 4.5, p_max_psi: float = 10000.0
+) -> float:
+    if not IS_PI or pressure_channel is None:
+        return 0.0
+
+    try:
+        voltage = pressure_channel.voltage
+
+        if voltage < v_min:
+            voltage = v_min
+        elif voltage > v_max:
+            voltage = v_max
+
+        pressure_psi = ((voltage - v_min) / (v_max - v_min)) * p_max_psi
+        return float(round(pressure_psi, 2))
+    except Exception as err:
+        logger.error(f"[Pressure Transducer Error] Failed to read sensor: {err}")
+        return -999.0
+
+
+# --- LIVE CSV TELEMETRY LOGGER CLASS ---
+class LiveCSVLogger:
+    """Manages real-time logging of telemetry data to CSV during active test runs."""
+
+    def __init__(self, output_dir="test_logs"):
+        self.output_dir = output_dir
+        self.file_handle = None
+        self.writer = None
+        self.active_test_name = None
+
+        if not os.path.exists(self.output_dir):
+            os.makedirs(self.output_dir)
+
+    def start_new_log(self, test_name):
+        self.close_log()
+        self.active_test_name = test_name
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        filename = os.path.join(self.output_dir, f"telemetry_{test_name}_{timestamp}.csv")
+
+        try:
+            self.file_handle = open(filename, mode="w", newline="", encoding="utf-8")
+            self.writer = csv.writer(self.file_handle)
+
+            # Write CSV Header
+            self.writer.writerow(
+                [
+                    "Timestamp",
+                    "State",
+                    "Current_Cycle",
+                    "Target_Cycles",
+                    "Temperature_C",
+                    "Temperature_F",
+                    "Pressure_PSI",
+                    "Pressure_Bar",
+                    "Weight_LB",
+                    "Weight_G",
+                    "Packing_Force_N",
+                    "Torque_FTLB",
+                    "Torque_NM",
+                ]
+            )
+            self.file_handle.flush()
+            logger.info(f"[CSV Logger] Recording test telemetry to: {filename}")
+        except Exception as err:
+            logger.error(f"[CSV Logger Error] Failed to create log file: {err}")
+
+    def log_telemetry(self, data: dict):
+        if self.writer and self.file_handle:
+            try:
+                self.writer.writerow(
+                    [
+                        time.strftime("%Y-%m-%d %H:%M:%S"),
+                        data.get("current_state", ""),
+                        data.get("current_cycle", 0),
+                        data.get("target_cycles", 0),
+                        data.get("temperature_c", -999.0),
+                        data.get("temperature_f", -999.0),
+                        data.get("pressure_psi", -999.0),
+                        data.get("pressure_bar", -999.0),
+                        data.get("weight_lb", -999.0),
+                        data.get("weight_g", -999.0),
+                        data.get("packing_force_N", -999.0),
+                        data.get("torque_ftlb", -999.0),
+                        data.get("torque_nm", -999.0),
+                    ]
+                )
+                self.file_handle.flush()
+            except Exception as err:
+                logger.error(f"[CSV Logger Error] Failed to write row: {err}")
+
+    def close_log(self):
+        if self.file_handle:
+            try:
+                self.file_handle.flush()
+                self.file_handle.close()
+                logger.info(f"[CSV Logger] Closed telemetry log for '{self.active_test_name}'.")
+            except Exception as err:
+                logger.error(f"[CSV Logger Error] Failed to close file: {err}")
+            finally:
+                self.file_handle = None
+                self.writer = None
+                self.active_test_name = None
+
+
+# Instantiate global CSV logger
+csv_logger = LiveCSVLogger()
+
+
 # --- ZMQ TELEMETRY PUBLISHER THREAD ---
 def start_telemetry_publisher(state_machine):
-    """Publishes live telemetry every 1 second over tcp://127.0.0.1:5556."""
+    """Publishes live telemetry every 1 second over tcp://127.0.0.1:5556 and logs to CSV during active tests."""
     context = zmq.Context()
     pub_socket = context.socket(zmq.PUB)
     pub_socket.setsockopt(zmq.LINGER, 0)
@@ -297,6 +418,13 @@ def start_telemetry_publisher(state_machine):
             temp_c = read_temperature_celsius()
             temp_f = round((temp_c * 9 / 5) + 32, 2) if temp_c != -999.0 else -999.0
 
+            pressure_psi = read_pressure_psi()
+            if pressure_psi != -999.0:
+                pressure_bar = round(pressure_psi * 0.0689475729, 3)
+            else:
+                pressure_psi = -999.0
+                pressure_bar = -999.0
+
             weight_lb = read_weight_lbs()
             if weight_lb is not None:
                 weight_g = round(weight_lb * 453.59237, 2)
@@ -306,7 +434,6 @@ def start_telemetry_publisher(state_machine):
                 weight_g = -999.0
                 packing_force_n = -999.0
 
-            # Read breakaway torque (ft-lbs and N-m conversion)
             torque_ftlb = read_breakaway_torque_ftlb()
             if torque_ftlb is not None:
                 torque_nm = round(torque_ftlb * 1.3558179483, 3)
@@ -314,20 +441,34 @@ def start_telemetry_publisher(state_machine):
                 torque_ftlb = -999.0
                 torque_nm = -999.0
 
+            current_state = state_machine.current_state_value
+
             telemetry_data = {
                 "temperature_c": temp_c,
                 "temperature_f": temp_f,
+                "pressure_psi": pressure_psi,
+                "pressure_bar": pressure_bar,
                 "weight_g": weight_g,
                 "weight_lb": weight_lb,
                 "packing_force_N": packing_force_n,
                 "torque_ftlb": torque_ftlb,
                 "torque_nm": torque_nm,
-                "current_state": state_machine.current_state_value,
+                "current_state": current_state,
                 "current_cycle": state_machine.current_cycle,
                 "target_cycles": state_machine.target_cycles,
             }
+
+            # Send over ZeroMQ
             pub_socket.send_json(telemetry_data)
-            logger.info("[Backend] Telemetry data sent")
+
+            # Record to CSV if test is active
+            if current_state != "Idle":
+                if csv_logger.active_test_name != current_state:
+                    csv_logger.start_new_log(current_state)
+                csv_logger.log_telemetry(telemetry_data)
+            else:
+                if csv_logger.active_test_name is not None:
+                    csv_logger.close_log()
 
         except Exception as err:
             logger.error(f"[Telemetry Error] {err}")
@@ -362,17 +503,23 @@ class SystemStates(StateChart):
         self.test_thread = None
 
     def on_enter_WearTest(self):
-        logger.info(f"[Backend] Starting Wear Test with {self.target_cycles} target cycles...")
+        logger.info(
+            f"[Backend] Starting Wear Test with {self.target_cycles} target cycles..."
+        )
         self.is_running = True
         self.current_cycle = 0
-        self.test_thread = threading.Thread(target=self._run_wear_cycle_loop, daemon=True)
+        self.test_thread = threading.Thread(
+            target=self._run_wear_cycle_loop, daemon=True
+        )
         self.test_thread.start()
 
     def _run_wear_cycle_loop(self):
         pin22.on()
         while self.is_running and self.current_cycle < self.target_cycles:
             self.current_cycle += 1
-            logger.info(f"[Wear Test] Cycle {self.current_cycle} / {self.target_cycles}")
+            logger.info(
+                f"[Wear Test] Cycle {self.current_cycle} / {self.target_cycles}"
+            )
             current_pulse = 0
             ppc = 9400
 
@@ -387,9 +534,9 @@ class SystemStates(StateChart):
 
             while current_pulse < ppc:
                 pin17.on()
-                sleep(.0001)
+                sleep(0.000425)
                 pin17.off()
-                sleep(0.0001)
+                sleep(0.000425)
                 current_pulse = 1 + current_pulse
 
         if self.is_running and self.current_cycle >= self.target_cycles:
@@ -435,7 +582,9 @@ class SystemStates(StateChart):
         pin27.off()
 
     def on_enter_Depressurized(self):
-        logger.info("[Backend] System Depressurized. Packing must be repressurized before returning to Idle.")
+        logger.info(
+            "[Backend] System Depressurized. Packing must be repressurized before returning to Idle."
+        )
         pin12.on()
         pin16.on()
         pin20.on()
@@ -454,7 +603,9 @@ class SystemStates(StateChart):
 
     def on_enter_Repressurizing(self):
         logger.info("[Backend] Repressurizing packing...")
-        self.test_thread = threading.Thread(target=self._run_repressurize_routine, daemon=True)
+        self.test_thread = threading.Thread(
+            target=self._run_repressurize_routine, daemon=True
+        )
         self.test_thread.start()
 
     def _run_repressurize_routine(self):
@@ -517,7 +668,9 @@ def run_backend_zmq_listener(state_machine):
                     event_method()
                     reply = f"ACK: State is now '{state_machine.current_state_value}'"
                 except TransitionNotAllowed:
-                    reply = f"ERR: Cannot transition via '{command}' from state '{state_machine.current_state_value}'."
+                    reply = (
+                        f"ERR: Cannot transition via '{command}' from state '{state_machine.current_state_value}'."
+                    )
                     logger.warning(f"[Backend Warning] {reply}")
                 except Exception as err:
                     reply = f"ERR: Exception during transition - {err}"
@@ -530,6 +683,7 @@ def run_backend_zmq_listener(state_machine):
     except KeyboardInterrupt:
         logger.info("\n[Backend] Shutting down backend server...")
     finally:
+        csv_logger.close_log()
         socket.close()
         context.term()
 
@@ -537,20 +691,19 @@ def run_backend_zmq_listener(state_machine):
 if __name__ == "__main__":
     sm = SystemStates()
 
-    # Tare both load cells before starting telemetry
     if not tare_scale():
-        logger.warning("Primary HX711 tare failed; force scale readings are uncalibrated")
+        logger.warning(
+            "Primary HX711 tare failed; force scale readings are uncalibrated"
+        )
 
     if not tare_torque_sensor():
-        logger.warning("Secondary HX711 tare failed; torque readings are uncalibrated")
+        logger.warning(
+            "Secondary HX711 tare failed; torque readings are uncalibrated"
+        )
 
-    # Start telemetry publisher
     telemetry_thread = threading.Thread(
-        target=start_telemetry_publisher,
-        args=(sm,),
-        daemon=True
+        target=start_telemetry_publisher, args=(sm,), daemon=True
     )
     telemetry_thread.start()
 
-    # Start ZeroMQ command server
     run_backend_zmq_listener(sm)
