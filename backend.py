@@ -534,9 +534,9 @@ class SystemStates(StateChart):
 
             while current_pulse < ppc:
                 pin17.on()
-                sleep(0.0001)
+                sleep(0.000425)
                 pin17.off()
-                sleep(0.0001)
+                sleep(0.000425)
                 current_pulse = 1 + current_pulse
 
         if self.is_running and self.current_cycle >= self.target_cycles:
